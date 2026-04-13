@@ -7,6 +7,7 @@ use anyhow::Result;
 #[derive(Row, Serialize, Clone, Debug)]
 pub struct NetworkFlowV4Row {
     pub timestamp: u32,
+    pub exporter_ip: Ipv4Addr,
     pub src_ip: Ipv4Addr,
     pub dst_ip: Ipv4Addr,
     pub dst_port: u16,
@@ -20,6 +21,7 @@ pub struct NetworkFlowV4Row {
 #[derive(Row, Serialize, Clone, Debug)]
 pub struct NetworkFlowV6Row {
     pub timestamp: u32,
+    pub exporter_ip: Ipv4Addr,
     pub src_ip: Ipv6Addr,
     pub dst_ip: Ipv6Addr,
     pub dst_port: u16,
@@ -48,6 +50,7 @@ impl ClickhouseExporter {
             CREATE TABLE IF NOT EXISTS network_flows_v4
             (
                 timestamp DateTime,
+                exporter_ip IPv4,
                 src_ip IPv4,
                 dst_ip IPv4,
                 dst_port UInt16,
@@ -58,13 +61,14 @@ impl ClickhouseExporter {
             ) 
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
-            ORDER BY (timestamp, src_ip, dst_ip, protocol)
+            ORDER BY (timestamp, exporter_ip, src_ip, dst_ip, protocol)
         "#;
 
         let ddl_v6 = r#"
             CREATE TABLE IF NOT EXISTS network_flows_v6
             (
                 timestamp DateTime,
+                exporter_ip IPv4,
                 src_ip IPv6,
                 dst_ip IPv6,
                 dst_port UInt16,
@@ -75,7 +79,7 @@ impl ClickhouseExporter {
             ) 
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
-            ORDER BY (timestamp, src_ip, dst_ip, protocol)
+            ORDER BY (timestamp, exporter_ip, src_ip, dst_ip, protocol)
         "#;
 
         self.client.query(ddl_v4).execute().await?;

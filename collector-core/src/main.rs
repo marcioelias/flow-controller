@@ -54,6 +54,7 @@ fn main() -> anyhow::Result<()> {
                     (flow_types::IpAddrType::V4(src_ip), flow_types::IpAddrType::V4(dst_ip)) => {
                         v4_batch.push(NetworkFlowV4Row {
                             timestamp: now,
+                            exporter_ip: key.exporter_ip,
                             src_ip,
                             dst_ip,
                             dst_port: key.dst_port,
@@ -66,6 +67,7 @@ fn main() -> anyhow::Result<()> {
                     (flow_types::IpAddrType::V6(src_ip), flow_types::IpAddrType::V6(dst_ip)) => {
                         v6_batch.push(NetworkFlowV6Row {
                             timestamp: now,
+                            exporter_ip: key.exporter_ip,
                             src_ip,
                             dst_ip,
                             dst_port: key.dst_port,

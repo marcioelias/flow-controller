@@ -5,6 +5,7 @@ use std::collections::HashMap;
 /// The key used to aggregate flows in fixed time windows
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AggregationKey {
+    pub exporter_ip: std::net::Ipv4Addr,
     pub src_ip: IpAddrType,
     pub dst_ip: IpAddrType,
     pub dst_port: u16,
@@ -37,6 +38,7 @@ impl ThreadLocalAggregator {
     #[inline]
     pub fn aggregate(&mut self, flow: &NormalizedFlow) {
         let key = AggregationKey {
+            exporter_ip: flow.exporter_ip,
             src_ip: flow.src_ip,
             dst_ip: flow.dst_ip,
             dst_port: flow.dst_port,
