@@ -1,0 +1,22 @@
+[package]
+name = "collector-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flow-types = { path = "../flow-types" }
+netflow-parser = { path = "../netflow-parser" }
+template-cache = { path = "../template-cache" }
+aggregator = { path = "../aggregator" }
+metrics = { path = "../metrics" }
+clickhouse-exporter = { path = "../clickhouse-exporter" }
+
+crossbeam-channel = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+socket2 = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
+flume = { workspace = true }
+ahash = { workspace = true }

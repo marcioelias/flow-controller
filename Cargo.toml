@@ -1,0 +1,45 @@
+[workspace]
+members = [
+    "collector-core",
+    "netflow-parser",
+    "template-cache",
+    "flow-types",
+    "aggregator",
+    "metrics",
+    "clickhouse-exporter",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Concurrency and runtime
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+tokio = { version = "1.37", features = ["full"] }
+parking_lot = "0.12"
+ahash = "0.8" 
+socket2 = "0.5"
+mio = "0.8" # Non-blocking IO 
+flume = "0.11" # Ultra-fast MPMC channels
+
+# Serialization and Bytes
+bytes = "1.5"
+nom = "7.1"
+byteorder = "1.5"
+
+# Metrics
+prometheus = "0.13"
+
+# Utilities
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1.0"
+anyhow = "1.0"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

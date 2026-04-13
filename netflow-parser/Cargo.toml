@@ -1,0 +1,11 @@
+[package]
+name = "netflow-parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nom = { workspace = true }
+byteorder = { workspace = true }
+flow-types = { path = "../flow-types" }
+thiserror = { workspace = true }
+template-cache = { path = "../template-cache" }

@@ -1,0 +1,8 @@
+[package]
+name = "template-cache"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ahash = { workspace = true }
+flow-types = { path = "../flow-types" }

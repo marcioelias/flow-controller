@@ -1,0 +1,7 @@
+[package]
+name = "flow-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes = { workspace = true }
