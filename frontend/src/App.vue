@@ -57,7 +57,7 @@ async function pollClickHouse() {
     isFetching.value = true
     // Chamada disparada ao Vite Proxy local (roteia -> http://localhost:8123)
     const sqlQuery = "SELECT toStartOfMinute(timestamp) as t, sum(bytes) as b FROM network_flows_v4 GROUP BY t ORDER BY t DESC LIMIT 10 FORMAT JSON"
-    const res = await fetch(`/ch-api/?query=${encodeURIComponent(sqlQuery)}`)
+    const res = await fetch(`/ch-api/?user=default&query=${encodeURIComponent(sqlQuery)}`)
     
     if (res.ok) {
       const data = await res.json()

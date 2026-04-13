@@ -14,6 +14,12 @@ RUN npm run build
 # ==========================================
 FROM nginx:alpine
 
+# Instalar utilitario para gerar senhas (.htpasswd)
+RUN apk add --no-cache apache2-utils
+
+# Criar usuario de acesso ao dashboard ('admin' com senha 'senhasegura123')
+RUN htpasswd -bc /etc/nginx/.htpasswd admin senhasegura123
+
 # Descartar conteúdo default HTML do Nginx
 RUN rm -rf /usr/share/nginx/html/*
 
