@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:23.8
     container_name: ch-database
     ports:
       # Debug Externo (Você pode acessar e rodar Query bruta por fora no Dbeaver)
@@ -19,10 +19,11 @@ services:
     networks:
       - flow-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8123/ping"]
-      interval: 5s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   flow-collector:
     build:
