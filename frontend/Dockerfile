@@ -4,7 +4,7 @@
 FROM node:20-slim as builder
 WORKDIR /app
 # Copy VERSION from repo root (needed by vite.config.ts)
-COPY VERSION ../VERSION
+COPY VERSION /VERSION
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ .
