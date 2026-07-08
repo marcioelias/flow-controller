@@ -118,7 +118,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.10.2.0/24
+        - subnet: ${FLOW_SUBNET:-10.10.2.0/24}
 
 volumes:
   clickhouse_data:

@@ -19,6 +19,7 @@ FV_VERSION="${FV_VERSION:-latest}"
 APP_USER="${APP_USER:-flowvision}"
 COMPOSE_PROJECT="flow"
 WITH_LLM=false
+FLOW_SUBNET="${FLOW_SUBNET:-10.10.2.0/24}"
 
 GHCR_OWNER="marcioelias"
 RAW_BASE="https://raw.githubusercontent.com/${GHCR_OWNER}/flowvision/main"
@@ -38,9 +39,10 @@ header() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 # ---- Parse args ---------------------------------------------
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --dir)       INSTALL_DIR="$2"; shift 2 ;;
-    --version)   FV_VERSION="$2";  shift 2 ;;
-    --with-llm)  WITH_LLM=true;    shift ;;
+    --dir)       INSTALL_DIR="$2";   shift 2 ;;
+    --version)   FV_VERSION="$2";   shift 2 ;;
+    --subnet)    FLOW_SUBNET="$2";  shift 2 ;;
+    --with-llm)  WITH_LLM=true;     shift ;;
     *) warn "Argumento desconhecido: $1"; shift ;;
   esac
 done
@@ -166,6 +168,7 @@ setup_env() {
 IMAGE_TAG=${FV_VERSION}
 JWT_SECRET=${JWT_SECRET}
 FLOW_RETENTION_DAYS=30
+FLOW_SUBNET=${FLOW_SUBNET}
 EOF
 
   chmod 600 "$ENV_FILE"
