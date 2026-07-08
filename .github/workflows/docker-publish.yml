@@ -56,10 +56,10 @@ jobs:
 
       # ── Collector ───────────────────────────────────────────────────────
       - name: Build and push Collector
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context:    .
-          dockerfile: Dockerfile
+          file: Dockerfile
           push:       ${{ github.event_name != 'pull_request' }}
           tags:       ${{ steps.tags.outputs.collector_tags }}
           cache-from: type=gha
@@ -68,10 +68,10 @@ jobs:
       # ── Dashboard ───────────────────────────────────────────────────────
       # Context is repo root so the Dockerfile can COPY VERSION from there
       - name: Build and push Dashboard
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context:    .
-          dockerfile: frontend/Dockerfile
+          file: frontend/Dockerfile
           push:       ${{ github.event_name != 'pull_request' }}
           tags:       ${{ steps.tags.outputs.dashboard_tags }}
           cache-from: type=gha
