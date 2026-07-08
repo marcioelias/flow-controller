@@ -6,18 +6,18 @@
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/flowvision}"
-VERSION="${1:-latest}"
+IMAGE_TAG="${1:-latest}"
 COMPOSE_PROJECT="flow"
 
 [[ $EUID -eq 0 ]] || { echo "Execute como root: sudo $0 [versão]" >&2; exit 1; }
 
-echo "Atualizando FlowVision para versão: ${VERSION}..."
+echo "Atualizando FlowVision para versão: ${IMAGE_TAG}..."
 
 ENV_FILE="${INSTALL_DIR}/.env"
-if grep -q "^VERSION=" "$ENV_FILE" 2>/dev/null; then
-  sed -i "s|^VERSION=.*|VERSION=${VERSION}|" "$ENV_FILE"
+if grep -q "^IMAGE_TAG=" "$ENV_FILE" 2>/dev/null; then
+  sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|" "$ENV_FILE"
 else
-  echo "VERSION=${VERSION}" >> "$ENV_FILE"
+  echo "IMAGE_TAG=${IMAGE_TAG}" >> "$ENV_FILE"
 fi
 
 cd "$INSTALL_DIR"
@@ -25,5 +25,5 @@ docker compose -p "$COMPOSE_PROJECT" pull --quiet
 docker compose -p "$COMPOSE_PROJECT" up -d --remove-orphans
 docker image prune -f &>/dev/null || true
 
-echo "Atualizado para ${VERSION}."
+echo "Atualizado para ${IMAGE_TAG}."
 docker compose -p "$COMPOSE_PROJECT" ps

@@ -26,7 +26,7 @@ services:
       start_period: 30s
 
   flow-collector:
-    image: ghcr.io/marcioelias/flowvision-collector:${VERSION:-latest}
+    image: ghcr.io/marcioelias/flowvision-collector:${IMAGE_TAG:-latest}
     environment:
       - CLICKHOUSE_URL=http://clickhouse:8123
       - JWT_SECRET=${JWT_SECRET:-insecure-default-change-me}
@@ -65,7 +65,7 @@ services:
       start_period: 15s
 
   dashboard:
-    image: ghcr.io/marcioelias/flowvision-dashboard:${VERSION:-latest}
+    image: ghcr.io/marcioelias/flowvision-dashboard:${IMAGE_TAG:-latest}
     container_name: vue-dashboard
     depends_on:
       flow-collector:

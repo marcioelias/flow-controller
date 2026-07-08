@@ -145,17 +145,17 @@ setup_env() {
   ENV_FILE="$INSTALL_DIR/.env"
 
   if [[ -f "$ENV_FILE" ]]; then
-    if grep -q "^VERSION=" "$ENV_FILE"; then
-      sed -i "s|^VERSION=.*|VERSION=${FV_VERSION}|" "$ENV_FILE"
+    if grep -q "^IMAGE_TAG=" "$ENV_FILE"; then
+      sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${FV_VERSION}|" "$ENV_FILE"
     else
-      echo "VERSION=${FV_VERSION}" >> "$ENV_FILE"
+      echo "IMAGE_TAG=${FV_VERSION}" >> "$ENV_FILE"
     fi
     if grep -q "insecure-default\|replace-with" "$ENV_FILE"; then
       NEW_SECRET=$(openssl rand -base64 48 | tr -d '\n/+=' | head -c 64)
       sed -i "s|JWT_SECRET=.*|JWT_SECRET=${NEW_SECRET}|" "$ENV_FILE"
       warn "JWT_SECRET era o valor padrão — foi regenerado."
     fi
-    ok ".env existente mantido (VERSION=${FV_VERSION})."
+    ok ".env existente mantido (IMAGE_TAG=${FV_VERSION})."
     return
   fi
 
@@ -163,7 +163,7 @@ setup_env() {
 
   cat > "$ENV_FILE" <<EOF
 # Gerado por install.sh em $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-VERSION=${FV_VERSION}
+IMAGE_TAG=${FV_VERSION}
 JWT_SECRET=${JWT_SECRET}
 FLOW_RETENTION_DAYS=30
 EOF
@@ -249,7 +249,7 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR}"
 VER="\${1:-latest}"
 echo "Atualizando FlowVision para versão: \${VER}..."
-sed -i "s|^VERSION=.*|VERSION=\${VER}|" "\${INSTALL_DIR}/.env"
+sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=\${VER}|" "\${INSTALL_DIR}/.env"
 cd "\${INSTALL_DIR}"
 docker compose pull --quiet
 systemctl restart flowvision
