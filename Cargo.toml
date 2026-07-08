@@ -7,7 +7,6 @@ members = [
     "aggregator",
     "metrics",
     "clickhouse-exporter",
-    "license-gen",
 ]
 resolver = "2"
 
