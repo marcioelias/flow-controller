@@ -26,9 +26,7 @@ services:
       start_period: 30s
 
   flow-collector:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/marcioelias/flowvision-collector:${VERSION:-latest}
     environment:
       - CLICKHOUSE_URL=http://clickhouse:8123
       - JWT_SECRET=${JWT_SECRET:-insecure-default-change-me}
@@ -67,9 +65,7 @@ services:
       start_period: 15s
 
   dashboard:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
+    image: ghcr.io/marcioelias/flowvision-dashboard:${VERSION:-latest}
     container_name: vue-dashboard
     depends_on:
       flow-collector:

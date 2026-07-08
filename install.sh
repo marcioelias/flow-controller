@@ -1,178 +1,202 @@
 #!/usr/bin/env bash
 # ============================================================
-# flow-collector — instalador baremetal
-# Suporta: Ubuntu/Debian, RHEL/Fedora/CentOS, Arch/Manjaro
-# Uso: curl -fsSL <url>/install.sh | sudo bash
-#   OU: sudo ./install.sh [--dir /opt/flow-collector]
+# FlowVision — instalador one-liner
+#
+# Uso rápido (sem clonar o repo):
+#   curl -fsSL https://raw.githubusercontent.com/marcioelias/flow-controller/main/install.sh | sudo bash
+#
+# Com versão específica:
+#   VERSION=1.1.0-beta.1 curl -fsSL ... | sudo bash
+#
+# Avançado:
+#   sudo ./install.sh [--dir /opt/flowvision] [--version 1.1.0-beta.1] [--with-llm]
 # ============================================================
 set -euo pipefail
 
-# ---- Variáveis configuráveis --------------------------------
-INSTALL_DIR="${INSTALL_DIR:-/opt/flow-collector}"
-SERVICE_NAME="flow-collector"
+# ---- Parâmetros ---------------------------------------------
+INSTALL_DIR="${INSTALL_DIR:-/opt/flowvision}"
+VERSION="${VERSION:-latest}"
+APP_USER="${APP_USER:-flowvision}"
 COMPOSE_PROJECT="flow"
-REPO_URL="${REPO_URL:-}"      # preenchido via env se clonar do git
-APP_USER="${APP_USER:-flowcollector}"
+WITH_LLM=false
+
+GHCR_OWNER="marcioelias"
+RAW_BASE="https://raw.githubusercontent.com/${GHCR_OWNER}/flow-controller/main"
 
 # ---- Cores --------------------------------------------------
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-info()    { echo -e "${CYAN}[INFO]${NC}  $*"; }
-ok()      { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
-header()  { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
+info()   { echo -e "${CYAN}[INFO]${NC}  $*"; }
+ok()     { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn()   { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+die()    { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+header() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
-# ---- Checar root --------------------------------------------
-[[ $EUID -eq 0 ]] || error "Execute como root: sudo $0"
+[[ $EUID -eq 0 ]] || die "Execute como root: sudo $0"
 
 # ---- Parse args ---------------------------------------------
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --dir) INSTALL_DIR="$2"; shift 2 ;;
-    --repo) REPO_URL="$2"; shift 2 ;;
+    --dir)       INSTALL_DIR="$2"; shift 2 ;;
+    --version)   VERSION="$2";     shift 2 ;;
+    --with-llm)  WITH_LLM=true;    shift ;;
     *) warn "Argumento desconhecido: $1"; shift ;;
   esac
 done
 
+# ---- Banner -------------------------------------------------
+echo -e "${BOLD}${CYAN}"
+cat <<'BANNER'
+  ███████╗██╗      ██████╗ ██╗    ██╗    ██╗   ██╗██╗███████╗██╗ ██████╗ ███╗   ██╗
+  ██╔════╝██║     ██╔═══██╗██║    ██║    ██║   ██║██║██╔════╝██║██╔═══██╗████╗  ██║
+  █████╗  ██║     ██║   ██║██║ █╗ ██║    ██║   ██║██║███████╗██║██║   ██║██╔██╗ ██║
+  ██╔══╝  ██║     ██║   ██║██║███╗██║    ╚██╗ ██╔╝██║╚════██║██║██║   ██║██║╚██╗██║
+  ██║     ███████╗╚██████╔╝╚███╔███╔╝     ╚████╔╝ ██║███████║██║╚██████╔╝██║ ╚████║
+  ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝       ╚═══╝  ╚═╝╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+BANNER
+echo -e "${NC}"
+info "Versão: ${VERSION}  |  Destino: ${INSTALL_DIR}"
+
 # ---- Detectar OS -------------------------------------------
 detect_os() {
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release
-    OS_ID="${ID:-unknown}"
-    OS_FAMILY="${ID_LIKE:-$OS_ID}"
-  else
-    error "Não foi possível detectar o sistema operacional."
-  fi
+  [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
+  . /etc/os-release
+  OS_ID="${ID:-unknown}"
+  OS_FAMILY="${ID_LIKE:-$OS_ID}"
 }
 
-# ---- Instalar Docker ----------------------------------------
-install_docker() {
+# ---- Instalar dependências ----------------------------------
+install_deps() {
+  header "Verificando dependências"
+
+  # Docker
   if command -v docker &>/dev/null; then
-    ok "Docker já instalado: $(docker --version)"
-    return
+    ok "Docker: $(docker --version | cut -d' ' -f3 | tr -d ',')"
+  else
+    header "Instalando Docker"
+    case "$OS_FAMILY" in
+      *debian*|*ubuntu*)
+        apt-get update -qq
+        apt-get install -y -qq ca-certificates curl gnupg
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+          | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+          https://download.docker.com/linux/${OS_ID} $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+          > /etc/apt/sources.list.d/docker.list
+        apt-get update -qq
+        apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
+        ;;
+      *rhel*|*fedora*|*centos*)
+        dnf install -y docker docker-compose-plugin
+        ;;
+      *arch*)
+        pacman -Sy --noconfirm docker docker-compose
+        ;;
+      *)
+        curl -fsSL https://get.docker.com | sh
+        ;;
+    esac
+    systemctl enable --now docker
+    ok "Docker instalado."
   fi
 
-  header "Instalando Docker"
-  case "$OS_FAMILY" in
-    *debian*|*ubuntu*)
-      apt-get update -qq
-      apt-get install -y -qq ca-certificates curl gnupg lsb-release
-      install -m 0755 -d /etc/apt/keyrings
-      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-      chmod a+r /etc/apt/keyrings/docker.gpg
-      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-        https://download.docker.com/linux/${OS_ID} $(lsb_release -cs) stable" \
-        > /etc/apt/sources.list.d/docker.list
-      apt-get update -qq
-      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
-      ;;
-    *rhel*|*fedora*|*centos*)
-      dnf install -y docker docker-compose-plugin
-      ;;
-    *arch*)
-      pacman -Sy --noconfirm docker docker-compose
-      ;;
-    *)
-      info "Tentando instalação genérica via get.docker.com..."
-      curl -fsSL https://get.docker.com | sh
-      ;;
-  esac
-
-  systemctl enable --now docker
-  ok "Docker instalado."
+  # curl (para baixar arquivos do GitHub)
+  command -v curl &>/dev/null || { apt-get install -y -qq curl 2>/dev/null || dnf install -y curl; }
 }
 
 # ---- Criar usuário dedicado ---------------------------------
-create_app_user() {
+create_user() {
+  header "Usuário de serviço"
   if id "$APP_USER" &>/dev/null; then
     ok "Usuário '$APP_USER' já existe."
   else
-    header "Criando usuário '$APP_USER'"
     useradd -r -s /sbin/nologin -d "$INSTALL_DIR" -M "$APP_USER"
     usermod -aG docker "$APP_USER"
-    ok "Usuário criado e adicionado ao grupo docker."
+    ok "Usuário '$APP_USER' criado."
   fi
 }
 
-# ---- Copiar ou clonar os arquivos ---------------------------
-setup_files() {
-  header "Configurando arquivos em $INSTALL_DIR"
+# ---- Baixar arquivos de configuração -----------------------
+download_files() {
+  header "Baixando arquivos de configuração (v${VERSION})"
   mkdir -p "$INSTALL_DIR"
 
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-  if [[ -f "$SCRIPT_DIR/docker-compose.yml" ]]; then
-    # Rodando dentro do próprio repo — copiar arquivos
-    info "Copiando arquivos do repositório local..."
-    rsync -a --exclude='.git' --exclude='target' --exclude='node_modules' \
-      "$SCRIPT_DIR/" "$INSTALL_DIR/"
-  elif [[ -n "$REPO_URL" ]]; then
-    # Clonar de um repositório remoto
-    if ! command -v git &>/dev/null; then
-      case "$OS_FAMILY" in
-        *debian*|*ubuntu*) apt-get install -y -qq git ;;
-        *rhel*|*fedora*|*centos*) dnf install -y git ;;
-        *arch*) pacman -Sy --noconfirm git ;;
-      esac
-    fi
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-      info "Repositório já existe — atualizando..."
-      git -C "$INSTALL_DIR" pull
-    else
-      git clone "$REPO_URL" "$INSTALL_DIR"
-    fi
+  # Se o docker-compose.yml já existe localmente (rodando de dentro do repo), usa ele
+  if [[ -f "$SCRIPT_DIR/docker-compose.yml" ]] && [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
+    info "Copiando docker-compose.yml do repo local..."
+    cp "$SCRIPT_DIR/docker-compose.yml" "$INSTALL_DIR/docker-compose.yml"
+  elif [[ ! -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+    info "Baixando docker-compose.yml do GitHub..."
+    curl -fsSL "${RAW_BASE}/docker-compose.yml" -o "$INSTALL_DIR/docker-compose.yml"
   else
-    error "Nenhum repositório encontrado. Execute dentro do repo ou use --repo <url>."
+    info "docker-compose.yml já existe — mantendo."
   fi
 
   chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
-  ok "Arquivos prontos."
+  ok "Arquivos prontos em $INSTALL_DIR"
 }
 
-# ---- Gerar .env com segredos --------------------------------
+# ---- Gerar .env ---------------------------------------------
 setup_env() {
-  header "Configurando variáveis de ambiente"
+  header "Variáveis de ambiente"
   ENV_FILE="$INSTALL_DIR/.env"
 
   if [[ -f "$ENV_FILE" ]]; then
-    warn ".env já existe — mantendo configuração atual."
-    # Garante que JWT_SECRET não é o valor de exemplo
-    if grep -q "replace-with-a-64-char" "$ENV_FILE"; then
-      warn "JWT_SECRET ainda é o valor padrão. Gerando novo segredo..."
+    # Atualiza VERSION se mudou
+    if grep -q "^VERSION=" "$ENV_FILE"; then
+      sed -i "s|^VERSION=.*|VERSION=${VERSION}|" "$ENV_FILE"
+    else
+      echo "VERSION=${VERSION}" >> "$ENV_FILE"
+    fi
+    # Regenera JWT_SECRET se ainda é o valor de exemplo
+    if grep -q "insecure-default\|replace-with" "$ENV_FILE"; then
       NEW_SECRET=$(openssl rand -base64 48 | tr -d '\n/+=' | head -c 64)
       sed -i "s|JWT_SECRET=.*|JWT_SECRET=${NEW_SECRET}|" "$ENV_FILE"
-      ok "JWT_SECRET atualizado."
+      warn "JWT_SECRET era o valor padrão — foi regenerado."
     fi
+    ok ".env existente mantido (VERSION atualizada para ${VERSION})."
     return
   fi
 
   JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n/+=' | head -c 64)
 
   cat > "$ENV_FILE" <<EOF
-# Gerado automaticamente por install.sh em $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# ATENÇÃO: mantenha este arquivo seguro — contém segredos de produção
-
+# Gerado por install.sh em $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+VERSION=${VERSION}
 JWT_SECRET=${JWT_SECRET}
 FLOW_RETENTION_DAYS=30
 EOF
 
   chmod 600 "$ENV_FILE"
   chown "$APP_USER:$APP_USER" "$ENV_FILE"
-  ok ".env criado com JWT_SECRET gerado aleatoriamente."
+  ok ".env criado."
 }
 
-# ---- Criar serviço systemd ----------------------------------
-install_systemd_service() {
-  header "Instalando serviço systemd"
-  SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+# ---- Otimizações do kernel ----------------------------------
+tune_kernel() {
+  header "Parâmetros do kernel"
+  cat > /etc/sysctl.d/90-flowvision.conf <<'EOF'
+net.core.rmem_max = 134217728
+net.core.rmem_default = 33554432
+net.core.wmem_max = 134217728
+net.ipv4.udp_mem = 102400 873800 16777216
+net.core.netdev_max_backlog = 50000
+EOF
+  sysctl -p /etc/sysctl.d/90-flowvision.conf &>/dev/null
+  ok "Buffers UDP aumentados."
+}
 
-  cat > "$SERVICE_FILE" <<EOF
+# ---- Serviço systemd ----------------------------------------
+install_service() {
+  header "Serviço systemd"
+  cat > /etc/systemd/system/flowvision.service <<EOF
 [Unit]
-Description=Flow Collector (NetFlow/IPFIX)
-Documentation=https://github.com/$(basename "$INSTALL_DIR")
+Description=FlowVision — NetFlow/IPFIX Collector
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
@@ -182,206 +206,132 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${INSTALL_DIR}/.env
-ExecStartPre=/usr/bin/docker compose -p ${COMPOSE_PROJECT} pull --quiet || true
-ExecStart=/usr/bin/docker compose -p ${COMPOSE_PROJECT} up -d --build --remove-orphans
+ExecStartPre=-/usr/bin/docker compose -p ${COMPOSE_PROJECT} pull --quiet
+ExecStart=/usr/bin/docker compose -p ${COMPOSE_PROJECT} up -d --remove-orphans
 ExecStop=/usr/bin/docker compose -p ${COMPOSE_PROJECT} down
-ExecReload=/usr/bin/docker compose -p ${COMPOSE_PROJECT} restart
 User=${APP_USER}
 StandardOutput=journal
 StandardError=journal
 TimeoutStartSec=300
 TimeoutStopSec=120
 Restart=on-failure
-RestartSec=10s
+RestartSec=15s
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable "$SERVICE_NAME"
-  ok "Serviço '${SERVICE_NAME}' registrado e habilitado no boot."
+  systemctl enable flowvision
+  ok "Serviço 'flowvision' habilitado no boot."
 }
 
-# ---- Configurar firewall (UFW/firewalld) --------------------
+# ---- Firewall -----------------------------------------------
 configure_firewall() {
-  header "Configurando firewall"
-
-  if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
-    info "UFW detectado. Abrindo portas necessárias..."
-    ufw allow 2055/udp comment "NetFlow/IPFIX collector"
-    ufw allow 8080/tcp comment "Flow Collector dashboard"
-    ok "Regras UFW adicionadas."
+  header "Firewall"
+  if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
+    ufw allow 2055/udp comment "FlowVision NetFlow/IPFIX" &>/dev/null
+    ufw allow 8080/tcp comment "FlowVision dashboard"     &>/dev/null
+    ok "UFW: portas 2055/udp e 8080/tcp abertas."
   elif command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
-    info "firewalld detectado. Abrindo portas necessárias..."
-    firewall-cmd --permanent --add-port=2055/udp
-    firewall-cmd --permanent --add-port=8080/tcp
-    firewall-cmd --reload
-    ok "Regras firewalld adicionadas."
+    firewall-cmd --permanent --add-port=2055/udp &>/dev/null
+    firewall-cmd --permanent --add-port=8080/tcp &>/dev/null
+    firewall-cmd --reload &>/dev/null
+    ok "firewalld: portas 2055/udp e 8080/tcp abertas."
   else
-    warn "Nenhum firewall ativo detectado. Abra manualmente as portas 2055/udp e 8080/tcp."
+    warn "Nenhum firewall ativo. Abra manualmente: 2055/udp e 8080/tcp."
   fi
 }
 
-# ---- Instalar script de update e logrotate -----------------
-install_extras() {
-  header "Instalando utilitários extras"
+# ---- Instalar utilitários -----------------------------------
+install_tools() {
+  header "Utilitários"
 
-  # Script de atualização
-  cat > /usr/local/bin/flow-collector-update <<'UPDATESCRIPT'
+  cat > /usr/local/bin/flowvision-update <<SCRIPT
 #!/usr/bin/env bash
 set -euo pipefail
-INSTALL_DIR="/opt/flow-collector"
-cd "$INSTALL_DIR"
-echo "Parando serviço..."
-systemctl stop flow-collector
-echo "Baixando atualizações..."
-git pull 2>/dev/null || true
-echo "Rebuilding imagens..."
-docker compose pull --quiet || true
-docker compose build --no-cache
-echo "Iniciando serviço..."
-systemctl start flow-collector
-echo "Limpando imagens antigas..."
-docker image prune -f
-echo "Atualização concluída!"
-systemctl status flow-collector --no-pager
-UPDATESCRIPT
-  chmod +x /usr/local/bin/flow-collector-update
+INSTALL_DIR="${INSTALL_DIR}"
+VERSION="\${1:-latest}"
+echo "Atualizando FlowVision para versão: \${VERSION}..."
+sed -i "s|^VERSION=.*|VERSION=\${VERSION}|" "\${INSTALL_DIR}/.env"
+cd "\${INSTALL_DIR}"
+docker compose pull --quiet
+systemctl restart flowvision
+docker image prune -f &>/dev/null || true
+echo "Atualizado! Verifique: systemctl status flowvision"
+SCRIPT
+  chmod +x /usr/local/bin/flowvision-update
 
-  # Logrotate para journal do serviço
-  cat > /etc/logrotate.d/flow-collector <<'LOGROTATE'
-/var/log/flow-collector.log {
-    daily
-    missingok
-    rotate 14
-    compress
-    delaycompress
-    notifempty
-    sharedscripts
-}
-LOGROTATE
-
-  # Script de status
-  cat > /usr/local/bin/flow-collector-status <<STATUSSCRIPT
+  cat > /usr/local/bin/flowvision-status <<SCRIPT
 #!/usr/bin/env bash
-echo ""
-echo "=== Serviço systemd ==="
-systemctl status flow-collector --no-pager -l
+echo "=== Serviço ==="
+systemctl status flowvision --no-pager -l
 echo ""
 echo "=== Containers ==="
 docker compose -p flow -f ${INSTALL_DIR}/docker-compose.yml ps
 echo ""
-echo "=== Uso de recursos ==="
-docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" \
-  ch-database rust-collector vue-dashboard 2>/dev/null || true
-STATUSSCRIPT
-  chmod +x /usr/local/bin/flow-collector-status
+echo "=== Recursos ==="
+docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null || true
+SCRIPT
+  chmod +x /usr/local/bin/flowvision-status
 
-  ok "Comandos disponíveis: flow-collector-update, flow-collector-status"
+  ok "Comandos: flowvision-update [versão], flowvision-status"
 }
 
-# ---- Ajuste de performance do kernel ------------------------
-tune_kernel() {
-  header "Otimizando parâmetros do kernel para alto volume UDP"
-  SYSCTL_FILE="/etc/sysctl.d/90-flow-collector.conf"
-
-  cat > "$SYSCTL_FILE" <<'EOF'
-# Buffer UDP para alto volume de NetFlow
-net.core.rmem_max = 134217728
-net.core.rmem_default = 33554432
-net.core.wmem_max = 134217728
-net.core.wmem_default = 33554432
-net.ipv4.udp_mem = 102400 873800 16777216
-# Backlog de conexões
-net.core.netdev_max_backlog = 50000
-EOF
-
-  sysctl -p "$SYSCTL_FILE" &>/dev/null
-  ok "Parâmetros do kernel aplicados."
-}
-
-# ---- Iniciar os serviços ------------------------------------
+# ---- Iniciar ------------------------------------------------
 start_services() {
-  header "Iniciando flow-collector"
+  header "Iniciando serviços"
   cd "$INSTALL_DIR"
 
-  # Build e start via Docker Compose direto (systemd cuida dos restarts)
-  sudo -u "$APP_USER" docker compose -p "$COMPOSE_PROJECT" up -d --build 2>&1 | \
-    grep -E "^(#|=>|ERROR|error)" || true
+  PULL_ARGS=()
+  [[ "$WITH_LLM" == true ]] && PULL_ARGS+=("--profile" "llm")
 
-  systemctl start "$SERVICE_NAME" 2>/dev/null || true
+  sudo -u "$APP_USER" docker compose "${PULL_ARGS[@]}" pull --quiet
+  sudo -u "$APP_USER" docker compose "${PULL_ARGS[@]}" up -d --remove-orphans
 
-  # Aguardar healthcheck do ClickHouse
   info "Aguardando ClickHouse ficar saudável..."
-  TRIES=0
-  until docker inspect ch-database --format='{{.State.Health.Status}}' 2>/dev/null \
-    | grep -q "healthy" || [[ $TRIES -ge 24 ]]; do
-    sleep 5
-    TRIES=$((TRIES+1))
-    echo -n "."
+  for i in $(seq 1 24); do
+    STATUS=$(docker inspect ch-database --format='{{.State.Health.Status}}' 2>/dev/null || echo "waiting")
+    [[ "$STATUS" == "healthy" ]] && break
+    [[ $i -eq 24 ]] && { warn "ClickHouse ainda inicializando. Verifique: docker logs ch-database"; break; }
+    sleep 5 && echo -n "."
   done
   echo ""
-
-  if docker inspect ch-database --format='{{.State.Health.Status}}' 2>/dev/null | grep -q "healthy"; then
-    ok "ClickHouse saudável."
-  else
-    warn "ClickHouse pode ainda estar inicializando. Verifique com: docker logs ch-database"
-  fi
+  ok "Serviços iniciados."
 }
 
 # ---- Sumário ------------------------------------------------
 print_summary() {
-  SERVER_IP=$(hostname -I | awk '{print $1}')
+  IP=$(hostname -I | awk '{print $1}')
   echo ""
-  echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗"
-  echo -e "║       Flow Collector instalado com sucesso!          ║"
-  echo -e "╚══════════════════════════════════════════════════════╝${NC}"
+  echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════╗"
+  echo -e "║     FlowVision instalado com sucesso! 🎉        ║"
+  echo -e "╚══════════════════════════════════════════════════╝${NC}"
   echo ""
-  echo -e "  ${BOLD}Dashboard:${NC}    http://${SERVER_IP}:8080"
-  echo -e "  ${BOLD}Login:${NC}        admin / admin123  (troque após o primeiro acesso)"
-  echo -e "  ${BOLD}NetFlow/IPFIX:${NC} UDP ${SERVER_IP}:2055"
-  echo -e "  ${BOLD}Métricas:${NC}     http://${SERVER_IP}:3000/metrics  (Prometheus)"
+  echo -e "  ${BOLD}Dashboard:${NC}     http://${IP}:8080"
+  echo -e "  ${BOLD}Login padrão:${NC}  admin / admin123"
+  echo -e "  ${BOLD}NetFlow/IPFIX:${NC} UDP ${IP}:2055"
   echo ""
-  echo -e "  ${BOLD}Comandos úteis:${NC}"
-  echo "    flow-collector-status   — ver estado dos containers"
-  echo "    flow-collector-update   — atualizar para nova versão"
-  echo "    systemctl restart flow-collector"
-  echo "    journalctl -u flow-collector -f"
+  echo -e "  ${BOLD}Atualizar:${NC}     flowvision-update [versão]"
+  echo -e "  ${BOLD}Status:${NC}        flowvision-status"
+  echo -e "  ${BOLD}Logs:${NC}          journalctl -u flowvision -f"
   echo ""
-  echo -e "  ${BOLD}Arquivos:${NC}"
-  echo "    Config:  $INSTALL_DIR/.env"
-  echo "    Compose: $INSTALL_DIR/docker-compose.yml"
+  echo -e "  ${BOLD}Versão instalada:${NC} ${VERSION}"
+  [[ "$WITH_LLM" == true ]] && echo -e "  ${BOLD}Ollama (LLM):${NC}    http://${IP}:11434"
   echo ""
-  warn "Troque a senha padrão do dashboard imediatamente em produção!"
+  warn "Troque a senha padrão após o primeiro acesso!"
   echo ""
 }
 
 # ---- Main ---------------------------------------------------
-main() {
-  echo -e "${BOLD}${CYAN}"
-  echo "  ███████╗██╗      ██████╗ ██╗    ██╗"
-  echo "  ██╔════╝██║     ██╔═══██╗██║    ██║"
-  echo "  █████╗  ██║     ██║   ██║██║ █╗ ██║"
-  echo "  ██╔══╝  ██║     ██║   ██║██║███╗██║"
-  echo "  ██║     ███████╗╚██████╔╝╚███╔███╔╝"
-  echo "  ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝"
-  echo -e "  Collector  —  Instalador Baremetal${NC}"
-  echo ""
-
-  detect_os
-  info "Sistema detectado: ${OS_ID} (família: ${OS_FAMILY})"
-
-  install_docker
-  create_app_user
-  setup_files
-  setup_env
-  tune_kernel
-  install_systemd_service
-  install_extras
-  configure_firewall
-  start_services
-  print_summary
-}
-
-main "$@"
+detect_os
+install_deps
+create_user
+download_files
+setup_env
+tune_kernel
+install_service
+install_tools
+configure_firewall
+start_services
+print_summary

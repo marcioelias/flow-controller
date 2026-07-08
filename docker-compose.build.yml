@@ -1,0 +1,14 @@
+# Override para build local (desenvolvimento).
+# Uso: docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+services:
+  flow-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flowvision-collector:dev
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: flowvision-dashboard:dev
