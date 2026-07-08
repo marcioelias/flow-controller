@@ -3,10 +3,10 @@
 # FlowVision — instalador one-liner
 #
 # Uso rápido (sem clonar o repo):
-#   curl -fsSL https://raw.githubusercontent.com/marcioelias/flow-controller/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/marcioelias/flowvision/main/install.sh | sudo bash
 #
 # Com versão específica:
-#   VERSION=1.1.0-beta.1 curl -fsSL ... | sudo bash
+#   FV_VERSION=1.1.0-beta.1 curl -fsSL ... | sudo bash
 #
 # Avançado:
 #   sudo ./install.sh [--dir /opt/flowvision] [--version 1.1.0-beta.1] [--with-llm]
@@ -15,13 +15,13 @@ set -euo pipefail
 
 # ---- Parâmetros ---------------------------------------------
 INSTALL_DIR="${INSTALL_DIR:-/opt/flowvision}"
-VERSION="${VERSION:-latest}"
+FV_VERSION="${FV_VERSION:-latest}"
 APP_USER="${APP_USER:-flowvision}"
 COMPOSE_PROJECT="flow"
 WITH_LLM=false
 
 GHCR_OWNER="marcioelias"
-RAW_BASE="https://raw.githubusercontent.com/${GHCR_OWNER}/flow-controller/main"
+RAW_BASE="https://raw.githubusercontent.com/${GHCR_OWNER}/flowvision/main"
 
 # ---- Cores --------------------------------------------------
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -39,7 +39,7 @@ header() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 while [[ $# -gt 0 ]]; do
   case $1 in
     --dir)       INSTALL_DIR="$2"; shift 2 ;;
-    --version)   VERSION="$2";     shift 2 ;;
+    --version)   FV_VERSION="$2";  shift 2 ;;
     --with-llm)  WITH_LLM=true;    shift ;;
     *) warn "Argumento desconhecido: $1"; shift ;;
   esac
@@ -56,21 +56,21 @@ cat <<'BANNER'
   ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝       ╚═══╝  ╚═╝╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
 BANNER
 echo -e "${NC}"
-info "Versão: ${VERSION}  |  Destino: ${INSTALL_DIR}"
+info "Versão: ${FV_VERSION}  |  Destino: ${INSTALL_DIR}"
 
 # ---- Detectar OS -------------------------------------------
+# Usa subshell para evitar que o source do os-release sobrescreva variáveis do script
 detect_os() {
   [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
-  . /etc/os-release
-  OS_ID="${ID:-unknown}"
-  OS_FAMILY="${ID_LIKE:-$OS_ID}"
+  OS_ID=$(   . /etc/os-release && echo "${ID:-unknown}")
+  OS_FAMILY=$(. /etc/os-release && echo "${ID_LIKE:-$OS_ID}")
+  OS_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
 }
 
 # ---- Instalar dependências ----------------------------------
 install_deps() {
   header "Verificando dependências"
 
-  # Docker
   if command -v docker &>/dev/null; then
     ok "Docker: $(docker --version | cut -d' ' -f3 | tr -d ',')"
   else
@@ -84,7 +84,7 @@ install_deps() {
           | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
         chmod a+r /etc/apt/keyrings/docker.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-          https://download.docker.com/linux/${OS_ID} $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+          https://download.docker.com/linux/${OS_ID} ${OS_CODENAME} stable" \
           > /etc/apt/sources.list.d/docker.list
         apt-get update -qq
         apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
@@ -103,7 +103,6 @@ install_deps() {
     ok "Docker instalado."
   fi
 
-  # curl (para baixar arquivos do GitHub)
   command -v curl &>/dev/null || { apt-get install -y -qq curl 2>/dev/null || dnf install -y curl; }
 }
 
@@ -121,12 +120,11 @@ create_user() {
 
 # ---- Baixar arquivos de configuração -----------------------
 download_files() {
-  header "Baixando arquivos de configuração (v${VERSION})"
+  header "Baixando arquivos de configuração (v${FV_VERSION})"
   mkdir -p "$INSTALL_DIR"
 
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-  # Se o docker-compose.yml já existe localmente (rodando de dentro do repo), usa ele
   if [[ -f "$SCRIPT_DIR/docker-compose.yml" ]] && [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
     info "Copiando docker-compose.yml do repo local..."
     cp "$SCRIPT_DIR/docker-compose.yml" "$INSTALL_DIR/docker-compose.yml"
@@ -147,19 +145,17 @@ setup_env() {
   ENV_FILE="$INSTALL_DIR/.env"
 
   if [[ -f "$ENV_FILE" ]]; then
-    # Atualiza VERSION se mudou
     if grep -q "^VERSION=" "$ENV_FILE"; then
-      sed -i "s|^VERSION=.*|VERSION=${VERSION}|" "$ENV_FILE"
+      sed -i "s|^VERSION=.*|VERSION=${FV_VERSION}|" "$ENV_FILE"
     else
-      echo "VERSION=${VERSION}" >> "$ENV_FILE"
+      echo "VERSION=${FV_VERSION}" >> "$ENV_FILE"
     fi
-    # Regenera JWT_SECRET se ainda é o valor de exemplo
     if grep -q "insecure-default\|replace-with" "$ENV_FILE"; then
       NEW_SECRET=$(openssl rand -base64 48 | tr -d '\n/+=' | head -c 64)
       sed -i "s|JWT_SECRET=.*|JWT_SECRET=${NEW_SECRET}|" "$ENV_FILE"
       warn "JWT_SECRET era o valor padrão — foi regenerado."
     fi
-    ok ".env existente mantido (VERSION atualizada para ${VERSION})."
+    ok ".env existente mantido (VERSION=${FV_VERSION})."
     return
   fi
 
@@ -167,7 +163,7 @@ setup_env() {
 
   cat > "$ENV_FILE" <<EOF
 # Gerado por install.sh em $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-VERSION=${VERSION}
+VERSION=${FV_VERSION}
 JWT_SECRET=${JWT_SECRET}
 FLOW_RETENTION_DAYS=30
 EOF
@@ -251,14 +247,15 @@ install_tools() {
 #!/usr/bin/env bash
 set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR}"
-VERSION="\${1:-latest}"
-echo "Atualizando FlowVision para versão: \${VERSION}..."
-sed -i "s|^VERSION=.*|VERSION=\${VERSION}|" "\${INSTALL_DIR}/.env"
+VER="\${1:-latest}"
+echo "Atualizando FlowVision para versão: \${VER}..."
+sed -i "s|^VERSION=.*|VERSION=\${VER}|" "\${INSTALL_DIR}/.env"
 cd "\${INSTALL_DIR}"
 docker compose pull --quiet
 systemctl restart flowvision
 docker image prune -f &>/dev/null || true
-echo "Atualizado! Verifique: systemctl status flowvision"
+echo "Atualizado para \${VER}."
+systemctl status flowvision --no-pager
 SCRIPT
   chmod +x /usr/local/bin/flowvision-update
 
@@ -283,11 +280,11 @@ start_services() {
   header "Iniciando serviços"
   cd "$INSTALL_DIR"
 
-  PULL_ARGS=()
-  [[ "$WITH_LLM" == true ]] && PULL_ARGS+=("--profile" "llm")
+  COMPOSE_ARGS=()
+  [[ "$WITH_LLM" == true ]] && COMPOSE_ARGS+=("--profile" "llm")
 
-  sudo -u "$APP_USER" docker compose "${PULL_ARGS[@]}" pull --quiet
-  sudo -u "$APP_USER" docker compose "${PULL_ARGS[@]}" up -d --remove-orphans
+  sudo -u "$APP_USER" docker compose "${COMPOSE_ARGS[@]}" pull --quiet
+  sudo -u "$APP_USER" docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans
 
   info "Aguardando ClickHouse ficar saudável..."
   for i in $(seq 1 24); do
@@ -305,18 +302,17 @@ print_summary() {
   IP=$(hostname -I | awk '{print $1}')
   echo ""
   echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════╗"
-  echo -e "║     FlowVision instalado com sucesso! 🎉        ║"
+  echo -e "║     FlowVision instalado com sucesso!           ║"
   echo -e "╚══════════════════════════════════════════════════╝${NC}"
   echo ""
   echo -e "  ${BOLD}Dashboard:${NC}     http://${IP}:8080"
   echo -e "  ${BOLD}Login padrão:${NC}  admin / admin123"
   echo -e "  ${BOLD}NetFlow/IPFIX:${NC} UDP ${IP}:2055"
   echo ""
+  echo -e "  ${BOLD}Versão instalada:${NC} ${FV_VERSION}"
   echo -e "  ${BOLD}Atualizar:${NC}     flowvision-update [versão]"
   echo -e "  ${BOLD}Status:${NC}        flowvision-status"
   echo -e "  ${BOLD}Logs:${NC}          journalctl -u flowvision -f"
-  echo ""
-  echo -e "  ${BOLD}Versão instalada:${NC} ${VERSION}"
   [[ "$WITH_LLM" == true ]] && echo -e "  ${BOLD}Ollama (LLM):${NC}    http://${IP}:11434"
   echo ""
   warn "Troque a senha padrão após o primeiro acesso!"
