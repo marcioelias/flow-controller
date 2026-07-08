@@ -3,7 +3,6 @@ services:
     image: clickhouse/clickhouse-server:23.8
     container_name: ch-database
     ports:
-      # Debug Externo (Você pode acessar e rodar Query bruta por fora no Dbeaver)
       - "8123:8123"
       - "9000:9000"
     volumes:
@@ -18,6 +17,7 @@ services:
           memory: 4G
     networks:
       - flow-net
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
       interval: 10s
@@ -29,36 +29,104 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - JWT_SECRET=${JWT_SECRET:-insecure-default-change-me}
+      - FLOW_RETENTION_DAYS=${FLOW_RETENTION_DAYS:-30}
+      - LOG_FORMAT=json
+      - RUST_LOG=info
+      - EXABGP_CONFIG_PATH=/run/exabgp-config/exabgp.conf
+      - EXABGP_PIPE_PATH=/run/exabgp/exabgp.in
+      - LLM_ENABLED=${LLM_ENABLED:-false}
+      - LLM_ENDPOINT=${LLM_ENDPOINT:-http://ollama:11434}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
     container_name: rust-collector
     depends_on:
       clickhouse:
         condition: service_healthy
     ports:
-      # Porta massiva real da vida para roteadores injetarem Flows (Firewall pass needed!)
       - "2055:2055/udp"
+    volumes:
+      - auth_data:/app
+      - exabgp_config:/run/exabgp-config
+      - exabgp_run:/run/exabgp
     networks:
       - flow-net
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-      
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   dashboard:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     container_name: vue-dashboard
     depends_on:
-      - clickhouse
+      flow-collector:
+        condition: service_started
     ports:
-      # Sua dashboard fica ativa publicamente pelo IP local da infra (Mudei para 8080 para evitar conflito local)
       - "8080:80"
     networks:
       - flow-net
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: flow-ollama
+    restart: unless-stopped
+    profiles:
+      - llm
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - flow-net
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  exabgp:
+    image: pierky/exabgp:4.2.11
+    container_name: exabgp
+    network_mode: host
+    volumes:
+      - exabgp_config:/etc/exabgp
+      - exabgp_run:/run/exabgp
+    restart: unless-stopped
+    depends_on:
+      flow-collector:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "exabgp"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 networks:
   flow-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.2.0/24
 
 volumes:
   clickhouse_data:
+  auth_data:
+  exabgp_config:
+  exabgp_run:
+  ollama_data:

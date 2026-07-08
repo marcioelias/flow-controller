@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "chart.js": "^4.5.1",
@@ -16,17 +19,23 @@
     "radix-vue": "^1.9.17",
     "tailwind-merge": "^3.5.0",
     "vue": "^3.5.30",
-    "vue-chartjs": "^5.3.3"
+    "vue-chartjs": "^5.3.3",
+    "vue-router": "^4.2.5",
+    "pinia": "^2.1.7"
   },
   "devDependencies": {
     "@types/node": "^24.12.2",
     "@vitejs/plugin-vue": "^6.0.5",
+    "@vue/test-utils": "^2.4.1",
     "@vue/tsconfig": "^0.9.0",
+    "@vitest/ui": "^1.0.4",
     "autoprefixer": "^10.4.27",
+    "happy-dom": "^12.10.3",
     "postcss": "^8.5.8",
     "tailwindcss": "^3.4.19",
     "typescript": "~5.9.3",
     "vite": "^8.0.1",
+    "vitest": "^1.0.4",
     "vue-tsc": "^3.2.5"
   }
 }

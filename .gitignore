@@ -1,1 +1,43 @@
+# Rust build artifacts
 /target
+**/target
+
+# SQLite databases (runtime data)
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+.env
+license.key
+*.key
+
+# Frontend
+frontend/dist
+frontend/node_modules
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Dev helper scripts gerados durante desenvolvimento
+debug-auth.sh
+diagnose-flows.sh
+diagnostic.sh
+docker-wrapper.sh
+fix-clickhouse.sh
+fix-docker-permissions.sh
+fix-warnings.sh
+check-warnings.sh
+quick-check.sh
+recreate-admin.sh
+reset-clickhouse.sh
+test-and-build.sh
+test-api.sh
+test-udp.sh
+validate-and-build.sh
+install-deps.sh
+license-gen/

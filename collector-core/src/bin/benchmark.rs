@@ -1,24 +1,22 @@
-use flume::{Receiver, Sender};
-use socket2::{Domain, Protocol, Socket, Type};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use flume::Receiver;
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const UDP_BUFFER_SIZE: usize = 65536;
 const WORKER_COUNT: usize = 4;
 const QUEUE_CAPACITY: usize = 1_000_000;
 
+#[allow(dead_code)]
 struct PacketPayload {
     pub exporter_ip: std::net::IpAddr,
     pub data: Vec<u8>,
 }
 
-fn worker_loop(id: usize, rx: Receiver<PacketPayload>, processed_counter: Arc<AtomicUsize>) {
-    while let Ok(payload) = rx.recv() {
+fn worker_loop(_id: usize, rx: Receiver<PacketPayload>, processed_counter: Arc<AtomicUsize>) {
+    while let Ok(_payload) = rx.recv() {
         // Simulate minor processing overhead
-        let _len = payload.data.len();
         processed_counter.fetch_add(1, Ordering::Relaxed);
     }
 }

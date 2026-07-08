@@ -17,8 +17,8 @@ FROM debian:bookworm-slim
 # Variáveis globais necessárias
 WORKDIR /app
 
-# Instala SSL genérico caso precise de comunicação e limpa chaves mortas do SO
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# Instala SSL genérico caso precise de comunicação e SQLite para o banco de autenticação
+RUN apt-get update && apt-get install -y ca-certificates sqlite3 libsqlite3-0 wget && rm -rf /var/lib/apt/lists/*
 
 # Extraimos só o binário duro sem cache de deps de 5GB do target e jogamos pra imagem leve
 COPY --from=builder /app/target/release/collector-core /usr/local/bin/collector-core

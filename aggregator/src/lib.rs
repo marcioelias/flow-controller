@@ -8,8 +8,11 @@ pub struct AggregationKey {
     pub exporter_ip: std::net::Ipv4Addr,
     pub src_ip: IpAddrType,
     pub dst_ip: IpAddrType,
+    pub src_port: u16,
     pub dst_port: u16,
     pub protocol: u8,
+    pub src_asn: u32,
+    pub dst_asn: u32,
 }
 
 /// The accumulated metrics for a given AggregationKey
@@ -41,8 +44,11 @@ impl ThreadLocalAggregator {
             exporter_ip: flow.exporter_ip,
             src_ip: flow.src_ip,
             dst_ip: flow.dst_ip,
+            src_port: flow.src_port,
             dst_port: flow.dst_port,
             protocol: flow.protocol,
+            src_asn: flow.src_asn,
+            dst_asn: flow.dst_asn,
         };
 
         let metrics = self.map.entry(key).or_insert_with(AggregatedMetrics::default);

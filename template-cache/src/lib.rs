@@ -49,4 +49,8 @@ impl ThreadLocalTemplateCache {
     pub fn prune_old_templates(&mut self, current_time: u64, max_age_secs: u64) {
         self.cache.retain(|_, t| current_time.saturating_sub(t.timestamp) < max_age_secs);
     }
+
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
 }

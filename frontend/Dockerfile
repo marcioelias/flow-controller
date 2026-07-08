@@ -3,9 +3,11 @@
 # ==========================================
 FROM node:20-slim as builder
 WORKDIR /app
-COPY package*.json ./
+# Copy VERSION from repo root (needed by vite.config.ts)
+COPY VERSION ../VERSION
+COPY frontend/package*.json ./
 RUN npm install
-COPY . .
+COPY frontend/ .
 # Transpilação Javascript e CSS Modules
 RUN npm run build
 
@@ -14,12 +16,6 @@ RUN npm run build
 # ==========================================
 FROM nginx:alpine
 
-# Instalar utilitario para gerar senhas (.htpasswd)
-RUN apk add --no-cache apache2-utils
-
-# Criar usuario de acesso ao dashboard ('admin' com senha 'senhasegura123')
-RUN htpasswd -bc /etc/nginx/.htpasswd admin senhasegura123
-
 # Descartar conteúdo default HTML do Nginx
 RUN rm -rf /usr/share/nginx/html/*
 
@@ -27,7 +23,7 @@ RUN rm -rf /usr/share/nginx/html/*
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Importar a nossa rota máster do Proxy Nginx
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Espor interface pra Web World Wide
 EXPOSE 80
