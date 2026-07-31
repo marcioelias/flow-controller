@@ -22,7 +22,10 @@ pub struct TemplateField {
 pub struct Template {
     pub key: TemplateKey,
     pub fields: Vec<TemplateField>,
-    pub timestamp: u64, // Used for expiration
+    /// Collector wall-clock time of the last (re)insert — used for expiration.
+    /// Stamped locally on insert; the exporter's own clock is not trusted here
+    /// because skew would make fresh templates look ancient.
+    pub timestamp: u64,
 }
 
 /// A highly-performant cache designed to be owned by a single Worker thread.
@@ -48,7 +51,11 @@ impl ThreadLocalTemplateCache {
         self.cache.get(key)
     }
 
-    pub fn insert(&mut self, template: Template) {
+    pub fn insert(&mut self, mut template: Template) {
+        template.timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         self.cache.insert(template.key, template);
     }
 

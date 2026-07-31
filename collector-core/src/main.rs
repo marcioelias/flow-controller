@@ -305,6 +305,8 @@ async fn fetch_clickhouse_version(url: &str) -> Option<String> {
 const UDP_BUFFER_SIZE: usize = 65536;
 const QUEUE_CAPACITY: usize = 1_000_000;
 const FLUSH_INTERVAL_SECS: u64 = 1;
+// Well beyond any standard template refresh interval (v9 default is minutes)
+const TEMPLATE_MAX_AGE_SECS: u64 = 3600;
 
 struct PacketPayload {
     pub exporter_ip: std::net::IpAddr,
@@ -953,6 +955,9 @@ fn worker_loop(
         }
 
         if last_flush.elapsed() >= Duration::from_secs(FLUSH_INTERVAL_SECS) {
+            // Live exporters resend templates periodically, refreshing their
+            // insert timestamp — only abandoned entries age out here.
+            templates.prune_old_templates(unix_now_secs() as u64, TEMPLATE_MAX_AGE_SECS);
             worker_metrics
                 .template_cache_size
                 .set(templates.len() as i64);
