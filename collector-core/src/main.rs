@@ -166,6 +166,8 @@ async fn handle_debug_socket(
             }
         };
 
+        // NOTE: the console is a sampled view, not a capture — workers emit at
+        // most one flow per 10ms, so a filtered src_ip may appear sparsely.
         if let Some(ref filter) = src_ip_filter {
             if &flow.src_ip != filter {
                 continue;
@@ -307,6 +309,9 @@ const QUEUE_CAPACITY: usize = 1_000_000;
 const FLUSH_INTERVAL_SECS: u64 = 1;
 // Well beyond any standard template refresh interval (v9 default is minutes)
 const TEMPLATE_MAX_AGE_SECS: u64 = 3600;
+// Debug Console is a sampled view: matches the consumer-side rate limit so the
+// worker never pays for strings the socket would discard anyway
+const DEBUG_MIN_INTERVAL: Duration = Duration::from_millis(10);
 
 struct PacketPayload {
     pub exporter_ip: std::net::IpAddr,
@@ -895,6 +900,7 @@ fn worker_loop(
     let mut aggregator = ThreadLocalAggregator::new();
     let mut last_flush = Instant::now();
     let mut last_drop_warn = Instant::now() - Duration::from_secs(10);
+    let mut last_debug_send = Instant::now() - DEBUG_MIN_INTERVAL;
 
     loop {
         // Timed receive so the flush below runs even when no packets arrive —
@@ -911,14 +917,16 @@ fn worker_loop(
                     worker_metrics
                         .flows_decoded
                         .inc_by(parsed_flows.len() as u64);
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as u32;
 
                     for flow in parsed_flows {
-                        // Emit to debug channel before aggregation (send = never blocks workers)
-                        if debug_tx.receiver_count() > 0 {
+                        // Debug Console gets a producer-side sample: without this,
+                        // every flow pays 3 String allocs + a broadcast send that
+                        // the consumer (rate-limited to 10ms) would throw away —
+                        // opening the console degraded collection under load.
+                        if debug_tx.receiver_count() > 0
+                            && last_debug_send.elapsed() >= DEBUG_MIN_INTERVAL
+                        {
+                            last_debug_send = Instant::now();
                             let src_ip_str = match flow.src_ip {
                                 flow_types::IpAddrType::V4(a) => a.to_string(),
                                 flow_types::IpAddrType::V6(a) => a.to_string(),
@@ -928,7 +936,7 @@ fn worker_loop(
                                 flow_types::IpAddrType::V6(a) => a.to_string(),
                             };
                             let _ = debug_tx.send(DebugFlow {
-                                timestamp_sec: now,
+                                timestamp_sec: unix_now_secs(),
                                 exporter_ip: payload.exporter_ip.to_string(),
                                 src_ip: src_ip_str,
                                 dst_ip: dst_ip_str,
