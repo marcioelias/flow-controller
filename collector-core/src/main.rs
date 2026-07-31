@@ -801,9 +801,9 @@ fn main() -> anyhow::Result<()> {
                     (flow_types::IpAddrType::V4(src_ip), flow_types::IpAddrType::V4(dst_ip)) => {
                         v4_batch.push(NetworkFlowV4Row {
                             timestamp: ts,
-                            exporter_ip: key.exporter_ip.to_string(),
-                            src_ip: src_ip.to_string(),
-                            dst_ip: dst_ip.to_string(),
+                            exporter_ip: u32::from(key.exporter_ip),
+                            src_ip: u32::from(src_ip),
+                            dst_ip: u32::from(dst_ip),
                             src_port: key.src_port,
                             dst_port: key.dst_port,
                             protocol: key.protocol,
@@ -817,9 +817,9 @@ fn main() -> anyhow::Result<()> {
                     (flow_types::IpAddrType::V6(src_ip), flow_types::IpAddrType::V6(dst_ip)) => {
                         v6_batch.push(NetworkFlowV6Row {
                             timestamp: ts,
-                            exporter_ip: key.exporter_ip.to_string(),
-                            src_ip: src_ip.to_string(),
-                            dst_ip: dst_ip.to_string(),
+                            exporter_ip: u32::from(key.exporter_ip),
+                            src_ip: src_ip.octets(),
+                            dst_ip: dst_ip.octets(),
                             src_port: key.src_port,
                             dst_port: key.dst_port,
                             protocol: key.protocol,
