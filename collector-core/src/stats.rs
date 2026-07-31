@@ -542,6 +542,204 @@ pub async fn get_exporter_summary_handler(
     Ok(Json(rows))
 }
 
+// ─── 12.1 NOC overview ────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct OverviewQuery {
+    pub minutes: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct SamplingExporter {
+    pub exporter_ip: String,
+    pub rate: u32,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct Overview {
+    /// bps in the last full minute, split by direction (unknown counted as in
+    /// so single-direction exporters still fill the headline tile)
+    pub current_bps_in: u64,
+    pub current_bps_out: u64,
+    pub current_pps: u64,
+    pub flows_per_sec: u64,
+    /// max 1-minute bucket over the last 5 minutes (bps)
+    pub peak_bps_5m: u64,
+    /// 95th percentile of 1-minute buckets over the window (bps) — billing
+    pub p95_bps: u64,
+    pub avg_bps: u64,
+    pub active_talkers: u64,
+    pub active_exporters: u64,
+    pub total_bytes_24h: u64,
+    pub alerts_24h: u64,
+    /// events in the last 60 minutes (there is no ack state on events)
+    pub alerts_active: u64,
+    pub bgp_sessions_up: u64,
+    pub bgp_sessions_total: u64,
+    pub top_protocol: String,
+    pub sampling_exporters: Vec<SamplingExporter>,
+}
+
+pub async fn get_overview_handler(
+    State(state): State<Arc<crate::auth::AppState>>,
+    Query(params): Query<OverviewQuery>,
+) -> Result<Json<Overview>, StatusCode> {
+    let minutes = params.minutes.unwrap_or(60).clamp(1, 1440);
+    let mut ov = Overview::default();
+
+    // ── 1-minute buckets over the window (both tables, merged in Rust) ──
+    let bucket_sql = format!(
+        "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, \
+                sum(bytes) AS b, sum(packets) AS p, sum(flow_count) AS f, \
+                sumIf(bytes, direction = 1) AS out_b \
+         FROM network_flows_v4 WHERE timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
+         UNION ALL \
+         SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, \
+                sum(bytes) AS b, sum(packets) AS p, sum(flow_count) AS f, \
+                sumIf(bytes, direction = 1) AS out_b \
+         FROM network_flows_v6 WHERE timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
+         FORMAT JSON"
+    );
+    let val = ch_query(&bucket_sql).await?;
+    let mut buckets: BTreeMap<u64, [u64; 4]> = BTreeMap::new();
+    for row in val["data"].as_array().cloned().unwrap_or_default() {
+        let m = parse_u64_field(&row["minute"]);
+        let e = buckets.entry(m).or_insert([0; 4]);
+        e[0] += parse_u64_field(&row["b"]);
+        e[1] += parse_u64_field(&row["p"]);
+        e[2] += parse_u64_field(&row["f"]);
+        e[3] += parse_u64_field(&row["out_b"]);
+    }
+
+    if !buckets.is_empty() {
+        // Last full minute = second-to-last bucket when the last is still open
+        let entries: Vec<(&u64, &[u64; 4])> = buckets.iter().collect();
+        let now_min = (unix_now() / 60) * 60;
+        let current = entries
+            .iter()
+            .rev()
+            .find(|(m, _)| **m < now_min)
+            .or_else(|| entries.last())
+            .map(|(_, v)| **v)
+            .unwrap_or_default();
+        ov.current_bps_out = current[3] * 8 / 60;
+        ov.current_bps_in = (current[0].saturating_sub(current[3])) * 8 / 60;
+        ov.current_pps = current[1] / 60;
+        ov.flows_per_sec = current[2] / 60;
+
+        let mut bps: Vec<u64> = buckets.values().map(|v| v[0] * 8 / 60).collect();
+        ov.avg_bps = bps.iter().sum::<u64>() / bps.len() as u64;
+        bps.sort_unstable();
+        // nearest-rank p95
+        let idx = ((bps.len() as f64) * 0.95).ceil() as usize;
+        ov.p95_bps = bps[idx.saturating_sub(1).min(bps.len() - 1)];
+        ov.peak_bps_5m = buckets
+            .iter()
+            .rev()
+            .take(5)
+            .map(|(_, v)| v[0] * 8 / 60)
+            .max()
+            .unwrap_or(0);
+    }
+
+    // ── active talkers / exporters (last 5 min) ──
+    let act_sql = "SELECT uniq(src_ip) AS talkers, uniq(exporter_ip) AS exps \
+         FROM network_flows_v4 WHERE timestamp >= now() - INTERVAL 5 MINUTE \
+         UNION ALL \
+         SELECT uniq(src_ip) AS talkers, uniq(exporter_ip) AS exps \
+         FROM network_flows_v6 WHERE timestamp >= now() - INTERVAL 5 MINUTE \
+         FORMAT JSON";
+    if let Ok(val) = ch_query(act_sql).await {
+        for row in val["data"].as_array().cloned().unwrap_or_default() {
+            ov.active_talkers += parse_u64_field(&row["talkers"]);
+            ov.active_exporters = ov.active_exporters.max(parse_u64_field(&row["exps"]));
+        }
+    }
+
+    // ── 24h volume + top protocol (single scan) ──
+    let day_sql = "SELECT sum(bytes) AS b, \
+                sumIf(bytes, protocol = 6) AS tcp, sumIf(bytes, protocol = 17) AS udp, \
+                sumIf(bytes, protocol = 1) AS icmp \
+         FROM network_flows_v4 WHERE timestamp >= now() - INTERVAL 24 HOUR \
+         UNION ALL \
+         SELECT sum(bytes) AS b, \
+                sumIf(bytes, protocol = 6) AS tcp, sumIf(bytes, protocol = 17) AS udp, \
+                sumIf(bytes, protocol = 1) AS icmp \
+         FROM network_flows_v6 WHERE timestamp >= now() - INTERVAL 24 HOUR \
+         FORMAT JSON";
+    if let Ok(val) = ch_query(day_sql).await {
+        let (mut tcp, mut udp, mut icmp) = (0u64, 0u64, 0u64);
+        for row in val["data"].as_array().cloned().unwrap_or_default() {
+            ov.total_bytes_24h += parse_u64_field(&row["b"]);
+            tcp += parse_u64_field(&row["tcp"]);
+            udp += parse_u64_field(&row["udp"]);
+            icmp += parse_u64_field(&row["icmp"]);
+        }
+        let other = ov.total_bytes_24h.saturating_sub(tcp + udp + icmp);
+        ov.top_protocol = [
+            ("TCP", tcp),
+            ("UDP", udp),
+            ("ICMP", icmp),
+            ("Outros", other),
+        ]
+        .iter()
+        .max_by_key(|(_, v)| *v)
+        .map(|(n, _)| n.to_string())
+        .unwrap_or_default();
+    }
+
+    // ── alerts (SQLite) ──
+    if let Ok(row) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT \
+           (SELECT COUNT(*) FROM alert_events WHERE created_at >= datetime('now','-24 hours')), \
+           (SELECT COUNT(*) FROM alert_events WHERE created_at >= datetime('now','-60 minutes'))",
+    )
+    .fetch_one(&state.db)
+    .await
+    {
+        ov.alerts_24h = row.0 as u64;
+        ov.alerts_active = row.1 as u64;
+    }
+
+    // ── BGP sessions (in-memory map) ──
+    if let Ok(sessions) = state.bgp_sessions.read() {
+        ov.bgp_sessions_total = sessions.len() as u64;
+        ov.bgp_sessions_up = sessions.values().filter(|s| s.state == "up").count() as u64;
+    }
+
+    // ── sampled exporters (from the Prometheus gauge) ──
+    for family in state.metrics.registry.gather() {
+        if family.get_name() != "exporter_sampling_rate" {
+            continue;
+        }
+        for metric in family.get_metric() {
+            let rate = metric.get_gauge().get_value() as u32;
+            if rate <= 1 {
+                continue;
+            }
+            let ip = metric
+                .get_label()
+                .iter()
+                .find(|l| l.get_name() == "exporter_ip")
+                .map(|l| l.get_value().to_string())
+                .unwrap_or_default();
+            ov.sampling_exporters.push(SamplingExporter {
+                exporter_ip: ip,
+                rate,
+            });
+        }
+    }
+
+    Ok(Json(ov))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Only a syntactically valid IP may be interpolated into SQL

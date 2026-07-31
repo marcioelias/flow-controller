@@ -693,6 +693,7 @@ fn main() -> anyhow::Result<()> {
                 "/api/stats/exporters",
                 get(stats::get_exporter_summary_handler),
             )
+            .route("/api/stats/overview", get(stats::get_overview_handler))
             .route("/api/system/health", get(system_health::get_health_handler))
             // ML / AI routes
             .route("/api/ml/status", get(ml_api::get_ml_status))
