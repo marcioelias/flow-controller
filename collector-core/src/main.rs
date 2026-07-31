@@ -309,6 +309,9 @@ const UDP_BUFFER_SIZE: usize = 65536;
 // Shedding early under overload beats growing RSS until the OOM killer acts.
 const DEFAULT_QUEUE_CAPACITY: usize = 65_536;
 const FLUSH_INTERVAL_SECS: u64 = 1;
+// ClickHouse insert cadence: one part per insert, so batch several 1s windows
+const EXPORT_FLUSH_SECS: u64 = 5;
+const EXPORT_MAX_ROWS: usize = 500_000;
 // Well beyond any standard template refresh interval (v9 default is minutes)
 const TEMPLATE_MAX_AGE_SECS: u64 = 3600;
 // Debug Console is a sampled view: matches the consumer-side rate limit so the
@@ -717,47 +720,87 @@ fn main() -> anyhow::Result<()> {
     rt.spawn(async move {
         tracing::info!("Clickhouse Exporter background task started.");
         let mut last_ml_drop_warn = Instant::now() - Duration::from_secs(10);
-        while let Ok(window) = export_rx.recv_async().await {
-            let mut v4_batch = Vec::new();
-            let mut v6_batch = Vec::new();
-            // Timestamp of the window itself, not of the drain — a window may sit
-            // in the queue for a while when ClickHouse is slow.
-            let now = window.window_ts;
-            // Shared read-only: feature extraction and row building both walk it
-            let map = Arc::new(window.map);
 
-            // Feature extraction is CPU-bound (two full passes over the map) —
-            // run it on the blocking pool so this task stays free to issue the
-            // ClickHouse insert instead of stalling the runtime.
-            let feat_map = Arc::clone(&map);
-            let ml_features =
-                tokio::task::spawn_blocking(move || features::extract(now, &feat_map))
-                    .await
-                    .unwrap_or_default();
-            if !ml_features.is_empty() && ml_tx_ch.try_send(ml_features).is_err() {
-                exporter_metrics.ml_windows_dropped.inc();
-                if last_ml_drop_warn.elapsed() >= Duration::from_secs(10) {
-                    tracing::warn!("ML queue full — dropping feature batch");
-                    last_ml_drop_warn = Instant::now();
+        // ClickHouse wants few, large inserts (one part per insert). Windows
+        // are merged here and flushed on a time/size trigger instead of one
+        // insert per worker per second. Keyed by (window_ts, key) so rows keep
+        // the second they belong to.
+        let mut merge: std::collections::HashMap<
+            (u32, AggregationKey),
+            AggregatedMetrics,
+            ahash::RandomState,
+        > = std::collections::HashMap::with_hasher(ahash::RandomState::new());
+        let mut flush_tick = tokio::time::interval(Duration::from_secs(EXPORT_FLUSH_SECS));
+        flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                win = export_rx.recv_async() => {
+                    let Ok(window) = win else { break };
+                    // Timestamp of the window itself, not of the drain — a window
+                    // may sit in the queue for a while when ClickHouse is slow.
+                    let now = window.window_ts;
+                    // Shared read-only: features and merging both walk it
+                    let map = Arc::new(window.map);
+
+                    // Feature extraction is CPU-bound (two full passes over the
+                    // map) — run it on the blocking pool so this task stays free.
+                    // The ML pipeline expects 1-second windows: per window, not
+                    // per merged batch.
+                    let feat_map = Arc::clone(&map);
+                    let ml_features =
+                        tokio::task::spawn_blocking(move || features::extract(now, &feat_map))
+                            .await
+                            .unwrap_or_default();
+                    if !ml_features.is_empty() && ml_tx_ch.try_send(ml_features).is_err() {
+                        exporter_metrics.ml_windows_dropped.inc();
+                        if last_ml_drop_warn.elapsed() >= Duration::from_secs(10) {
+                            tracing::warn!("ML queue full — dropping feature batch");
+                            last_ml_drop_warn = Instant::now();
+                        }
+                    }
+
+                    // Live dashboard stays at 1s cadence: broadcast per window,
+                    // before merging
+                    let mut window_total_bytes = 0;
+                    let mut per_device_bytes: std::collections::HashMap<String, u64> =
+                        std::collections::HashMap::new();
+                    for (key, m) in map.iter() {
+                        window_total_bytes += m.bytes;
+                        *per_device_bytes
+                            .entry(key.exporter_ip.to_string())
+                            .or_insert(0) += m.bytes;
+
+                        let e = merge.entry((now, *key)).or_default();
+                        e.bytes += m.bytes;
+                        e.packets += m.packets;
+                        e.flow_count += m.flow_count;
+                    }
+                    let _ = ws_tx.send(LiveFlowStats {
+                        timestamp_sec: now,
+                        total_bytes: window_total_bytes,
+                        per_device: per_device_bytes,
+                    });
+
+                    if merge.len() < EXPORT_MAX_ROWS {
+                        continue;
+                    }
+                    // fall through to flush on size
                 }
+                _ = flush_tick.tick() => {}
             }
 
-            let mut batch_total_bytes = 0;
-            let mut per_device_bytes: std::collections::HashMap<String, u64> =
-                std::collections::HashMap::new();
+            if merge.is_empty() {
+                continue;
+            }
 
-            for (key, metrics) in map.iter() {
-                batch_total_bytes += metrics.bytes;
-
-                // Aggregate bytes per exporter_ip
-                *per_device_bytes
-                    .entry(key.exporter_ip.to_string())
-                    .or_insert(0) += metrics.bytes;
-
+            let mut v4_batch = Vec::new();
+            let mut v6_batch = Vec::new();
+            for ((ts, key), metrics) in merge.drain() {
                 match (key.src_ip, key.dst_ip) {
                     (flow_types::IpAddrType::V4(src_ip), flow_types::IpAddrType::V4(dst_ip)) => {
                         v4_batch.push(NetworkFlowV4Row {
-                            timestamp: now,
+                            timestamp: ts,
                             exporter_ip: key.exporter_ip.to_string(),
                             src_ip: src_ip.to_string(),
                             dst_ip: dst_ip.to_string(),
@@ -773,7 +816,7 @@ fn main() -> anyhow::Result<()> {
                     }
                     (flow_types::IpAddrType::V6(src_ip), flow_types::IpAddrType::V6(dst_ip)) => {
                         v6_batch.push(NetworkFlowV6Row {
-                            timestamp: now,
+                            timestamp: ts,
                             exporter_ip: key.exporter_ip.to_string(),
                             src_ip: src_ip.to_string(),
                             dst_ip: dst_ip.to_string(),
@@ -807,13 +850,6 @@ fn main() -> anyhow::Result<()> {
                     v6_batch.len()
                 );
             }
-
-            // Broadcast to connected websockets via ignoring send errors (e.g. no clients)
-            let _ = ws_tx.send(LiveFlowStats {
-                timestamp_sec: now,
-                total_bytes: batch_total_bytes,
-                per_device: per_device_bytes,
-            });
         }
     });
 
