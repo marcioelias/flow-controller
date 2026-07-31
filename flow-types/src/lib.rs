@@ -91,4 +91,7 @@ pub struct NormalizedFlow {
     pub egress_interface: u32,
     /// Cumulative TCP flags (if applicable)
     pub tcp_flags: u8,
+    /// Sampling rate learned from the exporter's options template (1 = unsampled).
+    /// `bytes` and `packets` are already scaled by this factor.
+    pub sampling_rate: u32,
 }

@@ -1,4 +1,4 @@
-use prometheus::{IntCounter, IntGauge, Registry};
+use prometheus::{IntCounter, IntGauge, IntGaugeVec, Opts, Registry};
 
 pub struct CollectorMetrics {
     pub registry: Registry,
@@ -23,6 +23,8 @@ pub struct CollectorMetrics {
     pub template_cache_size: IntGauge,
     /// Current depth of the export queue (windows waiting for insert)
     pub export_queue_depth: IntGauge,
+    /// Sampling rate learned per exporter observation domain (1 = unsampled)
+    pub exporter_sampling_rate: IntGaugeVec,
     /// DEPRECATED: same value as packets_received — kept so existing
     /// dashboards reading flows_received_total keep working
     pub flows_received: IntCounter,
@@ -110,6 +112,17 @@ impl CollectorMetrics {
             "flows_received_total",
             "DEPRECATED: same as packets_received_total (kept for old dashboards)",
         );
+        let exporter_sampling_rate = IntGaugeVec::new(
+            Opts::new(
+                "exporter_sampling_rate",
+                "Sampling rate learned per exporter observation domain (1 = unsampled)",
+            ),
+            &["exporter_ip", "domain"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(exporter_sampling_rate.clone()))
+            .unwrap();
 
         Self {
             registry,
@@ -124,6 +137,7 @@ impl CollectorMetrics {
             clickhouse_rows_inserted,
             template_cache_size,
             export_queue_depth,
+            exporter_sampling_rate,
             flows_received,
         }
     }

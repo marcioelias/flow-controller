@@ -77,6 +77,12 @@ pub const IANA_BGP_DST_ASN: u16 = 17;
 pub const IANA_IPV6_SRC_ADDR: u16 = 27;
 pub const IANA_IPV6_DST_ADDR: u16 = 28;
 
+// Sampling-related IEs carried in options data records
+pub const IANA_SAMPLING_INTERVAL: u16 = 34; // v9 classic
+pub const IANA_SAMPLER_RANDOM_INTERVAL: u16 = 50; // v9 random sampler
+pub const IANA_SAMPLING_PKT_INTERVAL: u16 = 305; // IPFIX
+pub const IANA_SAMPLING_PKT_SPACE: u16 = 306; // IPFIX — rate = (interval+space)/interval
+
 /// IPFIX variable-length field marker (RFC 7011 §7): actual length is a
 /// per-record prefix, not part of the template.
 pub const VARLEN: u16 = 0xFFFF;
@@ -148,10 +154,172 @@ fn parse_template_set(
                     template_id,
                 },
                 fields,
+                is_options: false,
+                scope_field_count: 0,
                 timestamp: export_time as u64,
             });
         }
     }
+}
+
+/// Parse a NetFlow v9 options template flowset (flowset_id 1).
+/// Layout: template_id (u16), option_scope_length (u16, bytes),
+/// option_length (u16, bytes), then scope entries then option entries,
+/// each `type (u16), length (u16)`.
+fn parse_v9_options_template_set(
+    set_data: &[u8],
+    source_id: u32,
+    export_time: u32,
+    exporter_ip: std::net::Ipv4Addr,
+    templates: &mut ThreadLocalTemplateCache,
+) {
+    let mut ptr = 0usize;
+    while ptr + 6 <= set_data.len() {
+        let template_id = u16::from_be_bytes([set_data[ptr], set_data[ptr + 1]]);
+        let scope_len = u16::from_be_bytes([set_data[ptr + 2], set_data[ptr + 3]]) as usize;
+        let option_len = u16::from_be_bytes([set_data[ptr + 4], set_data[ptr + 5]]) as usize;
+        ptr += 6;
+
+        if ptr + scope_len + option_len > set_data.len() {
+            break;
+        }
+
+        let scope_field_count = (scope_len / 4) as u16;
+        let total_fields = (scope_len + option_len) / 4;
+        let mut fields = Vec::with_capacity(total_fields);
+        for _ in 0..total_fields {
+            if ptr + 4 > set_data.len() {
+                break;
+            }
+            let field_type = u16::from_be_bytes([set_data[ptr], set_data[ptr + 1]]);
+            let length = u16::from_be_bytes([set_data[ptr + 2], set_data[ptr + 3]]);
+            ptr += 4;
+            fields.push(template_cache::TemplateField { field_type, length });
+        }
+
+        if template_id > 255 {
+            templates.insert(template_cache::Template {
+                key: template_cache::TemplateKey {
+                    exporter_ip,
+                    source_id,
+                    template_id,
+                },
+                fields,
+                is_options: true,
+                scope_field_count,
+                timestamp: export_time as u64,
+            });
+        }
+    }
+}
+
+/// Parse an IPFIX options template set (set_id 3).
+/// Layout: template_id (u16), field_count (u16), scope_field_count (u16),
+/// then all field specs (enterprise bit handled as in regular templates).
+fn parse_ipfix_options_template_set(
+    set_data: &[u8],
+    source_id: u32,
+    export_time: u32,
+    exporter_ip: std::net::Ipv4Addr,
+    templates: &mut ThreadLocalTemplateCache,
+) {
+    let mut ptr = 0usize;
+    while ptr + 6 <= set_data.len() {
+        let template_id = u16::from_be_bytes([set_data[ptr], set_data[ptr + 1]]);
+        let field_count = u16::from_be_bytes([set_data[ptr + 2], set_data[ptr + 3]]) as usize;
+        let scope_field_count = u16::from_be_bytes([set_data[ptr + 4], set_data[ptr + 5]]);
+        ptr += 6;
+
+        let max_possible = (set_data.len() - ptr) / 4;
+        let mut fields = Vec::with_capacity(field_count.min(max_possible));
+        for _ in 0..field_count {
+            if ptr + 4 > set_data.len() {
+                break;
+            }
+            let raw_type = u16::from_be_bytes([set_data[ptr], set_data[ptr + 1]]);
+            let length = u16::from_be_bytes([set_data[ptr + 2], set_data[ptr + 3]]);
+            ptr += 4;
+
+            if (raw_type & 0x8000) != 0 {
+                // Enterprise bit: skip the 4-byte enterprise number but keep the
+                // field for record walking — length still counts in the record
+                ptr += 4;
+            }
+
+            fields.push(template_cache::TemplateField {
+                field_type: raw_type & 0x7FFF,
+                length,
+            });
+        }
+
+        if template_id > 255 {
+            templates.insert(template_cache::Template {
+                key: template_cache::TemplateKey {
+                    exporter_ip,
+                    source_id,
+                    template_id,
+                },
+                fields,
+                is_options: true,
+                scope_field_count,
+                timestamp: export_time as u64,
+            });
+        }
+    }
+}
+
+/// Decode an options data record set: extract sampling-related IEs.
+/// Returns the sampling rate found, if any; produces no flows.
+fn parse_options_data_set(set_data: &[u8], template: &template_cache::Template) -> Option<u32> {
+    let record_size: usize = template.fields.iter().map(|f| f.length as usize).sum();
+    if record_size == 0 || template.fields.iter().any(|f| f.length == VARLEN) {
+        return None;
+    }
+
+    let mut learned: Option<u32> = None;
+    let mut d_ptr = 0usize;
+
+    while d_ptr + record_size <= set_data.len() {
+        let mut f_ptr = d_ptr;
+        let mut sampling_interval: Option<u64> = None;
+        let mut random_interval: Option<u64> = None;
+        let mut pkt_interval: Option<u64> = None;
+        let mut pkt_space: Option<u64> = None;
+
+        for field in &template.fields {
+            let f_len = field.length as usize;
+            if f_ptr + f_len > set_data.len() {
+                break;
+            }
+            let field_data = &set_data[f_ptr..f_ptr + f_len];
+            match field.field_type {
+                IANA_SAMPLING_INTERVAL => sampling_interval = Some(read_uint(field_data)),
+                IANA_SAMPLER_RANDOM_INTERVAL => random_interval = Some(read_uint(field_data)),
+                IANA_SAMPLING_PKT_INTERVAL => pkt_interval = Some(read_uint(field_data)),
+                IANA_SAMPLING_PKT_SPACE => pkt_space = Some(read_uint(field_data)),
+                _ => {}
+            }
+            f_ptr += f_len;
+        }
+
+        // Precedence: v9 classic > v9 random > IPFIX interval/space
+        let rate = sampling_interval.or(random_interval).or_else(|| {
+            pkt_interval.filter(|&i| i > 0).map(|i| {
+                // rate = (interval + space) / interval; space absent → unsampled
+                (i + pkt_space.unwrap_or(0)) / i
+            })
+        });
+
+        if let Some(r) = rate {
+            if r >= 1 && r <= u32::MAX as u64 {
+                learned = Some(r as u32);
+            }
+        }
+
+        d_ptr += record_size;
+    }
+
+    learned
 }
 
 #[inline]
@@ -171,6 +339,7 @@ fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFl
         ingress_interface: 0,
         egress_interface: 0,
         tcp_flags: 0,
+        sampling_rate: 1,
     }
 }
 
@@ -246,8 +415,11 @@ fn parse_data_set(
         None => return vec![],
     };
 
+    // Sampled exporter: scale counters so stored volumes approximate reality
+    let sampling_rate = templates.sampling_rate(exporter_ip, source_id);
+
     if template.fields.iter().any(|f| f.length == VARLEN) {
-        return parse_varlen_records(set_data, template, export_time, exporter_ip);
+        return parse_varlen_records(set_data, template, export_time, exporter_ip, sampling_rate);
     }
 
     let record_size: usize = template.fields.iter().map(|f| f.length as usize).sum();
@@ -271,11 +443,21 @@ fn parse_data_set(
             f_ptr += f_len;
         }
 
+        apply_sampling(&mut flow, sampling_rate);
         flows.push(flow);
         d_ptr += record_size;
     }
 
     flows
+}
+
+#[inline]
+fn apply_sampling(flow: &mut NormalizedFlow, rate: u32) {
+    flow.sampling_rate = rate;
+    if rate > 1 {
+        flow.bytes = flow.bytes.saturating_mul(rate as u64);
+        flow.packets = flow.packets.saturating_mul(rate as u64);
+    }
 }
 
 /// Data set whose template contains variable-length IEs (RFC 7011 §7):
@@ -288,6 +470,7 @@ fn parse_varlen_records(
     template: &template_cache::Template,
     export_time: u32,
     exporter_ip: std::net::Ipv4Addr,
+    sampling_rate: u32,
 ) -> Vec<NormalizedFlow> {
     // Smallest possible record: fixed lengths + 1 prefix byte per varlen field.
     // Anything shorter at the tail is set padding, not a record.
@@ -341,11 +524,54 @@ fn parse_varlen_records(
             f_ptr += f_len;
         }
 
+        apply_sampling(&mut flow, sampling_rate);
         flows.push(flow);
         d_ptr = f_ptr;
     }
 
     flows
+}
+
+/// Route a data set: options templates feed the sampling cache; regular
+/// templates produce flows. Shared by v9 and IPFIX.
+#[allow(clippy::too_many_arguments)]
+fn handle_data_set(
+    set_data: &[u8],
+    template_id: u16,
+    source_id: u32,
+    export_time: u32,
+    exporter_ip: std::net::Ipv4Addr,
+    templates: &mut ThreadLocalTemplateCache,
+    flows: &mut Vec<NormalizedFlow>,
+) {
+    let key = template_cache::TemplateKey {
+        exporter_ip,
+        source_id,
+        template_id,
+    };
+
+    // Options data records update the sampling rate; they carry no flows.
+    // Read in one scope so the mutable cache update can happen after.
+    let learned_rate = match templates.get(&key) {
+        Some(t) if t.is_options => parse_options_data_set(set_data, t),
+        Some(_) => {
+            let mut data_flows = parse_data_set(
+                set_data,
+                template_id,
+                source_id,
+                export_time,
+                exporter_ip,
+                templates,
+            );
+            flows.append(&mut data_flows);
+            return;
+        }
+        None => return,
+    };
+
+    if let Some(rate) = learned_rate {
+        templates.set_sampling_rate(exporter_ip, source_id, rate);
+    }
 }
 
 // ─── NetFlow v9 message parser ────────────────────────────────────────────────
@@ -385,17 +611,26 @@ fn parse_v9_message(
                     false,
                 );
             }
-            1 => { /* Options Template — skip */ }
+            1 => {
+                // Options Template FlowSet — carries sampling metadata
+                parse_v9_options_template_set(
+                    set_data,
+                    hdr.source_id,
+                    hdr.unix_secs,
+                    ipv4_exporter,
+                    templates,
+                );
+            }
             id if id > 255 => {
-                let mut data_flows = parse_data_set(
+                handle_data_set(
                     set_data,
                     id,
                     hdr.source_id,
                     hdr.unix_secs,
                     ipv4_exporter,
                     templates,
+                    &mut flows,
                 );
-                flows.append(&mut data_flows);
             }
             _ => {}
         }
@@ -449,17 +684,26 @@ fn parse_ipfix_message(
                     true, // enterprise IEs possible
                 );
             }
-            3 => { /* Options Template Set — skip */ }
+            3 => {
+                // Options Template Set — carries sampling metadata
+                parse_ipfix_options_template_set(
+                    set_data,
+                    hdr.observation_domain_id,
+                    hdr.export_time,
+                    ipv4_exporter,
+                    templates,
+                );
+            }
             id if id >= 256 => {
-                let mut data_flows = parse_data_set(
+                handle_data_set(
                     set_data,
                     id,
                     hdr.observation_domain_id,
                     hdr.export_time,
                     ipv4_exporter,
                     templates,
+                    &mut flows,
                 );
-                flows.append(&mut data_flows);
             }
             _ => {}
         }
@@ -763,6 +1007,110 @@ mod tests {
         let mut cache = ThreadLocalTemplateCache::new();
         let result = parse_packet(&pkt, &mut cache, exporter);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_v9_options_template_sampling() {
+        // Packet 1: data template + options template + options data (rate 1000)
+        // Packet 2: data record — counters must come back scaled ×1000
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 6));
+        let mut cache = ThreadLocalTemplateCache::new();
+
+        // First: regular template + flow via helper (rate not learned yet → ×1)
+        let pkt = build_v9_packet([192, 168, 1, 10], [8, 8, 8, 8], 100, 10);
+        let flows = parse_packet(&pkt, &mut cache, exporter).expect("v9 parse");
+        assert_eq!(flows[0].bytes, 100);
+        assert_eq!(flows[0].sampling_rate, 1);
+
+        // Options template (id 700): scope System(1,4) + samplingInterval(34,4)
+        let opts_tmpl_id: u16 = 700;
+        let mut pkt2 = Vec::new();
+        pkt2.extend_from_slice(&9u16.to_be_bytes());
+        pkt2.extend_from_slice(&2u16.to_be_bytes());
+        pkt2.extend_from_slice(&1000u32.to_be_bytes());
+        pkt2.extend_from_slice(&1700000100u32.to_be_bytes());
+        pkt2.extend_from_slice(&2u32.to_be_bytes());
+        pkt2.extend_from_slice(&100u32.to_be_bytes()); // same source_id as build_v9_packet
+
+        // Options template flowset (id=1):
+        // tmpl_id + scope_len(4) + option_len(4) + 1 scope field + 1 option field
+        let fs_len = 4 + 6 + 4 + 4;
+        pkt2.extend_from_slice(&1u16.to_be_bytes());
+        pkt2.extend_from_slice(&(fs_len as u16).to_be_bytes());
+        pkt2.extend_from_slice(&opts_tmpl_id.to_be_bytes());
+        pkt2.extend_from_slice(&4u16.to_be_bytes()); // scope length (bytes)
+        pkt2.extend_from_slice(&4u16.to_be_bytes()); // option length (bytes)
+        pkt2.extend_from_slice(&1u16.to_be_bytes()); // scope: System
+        pkt2.extend_from_slice(&4u16.to_be_bytes());
+        pkt2.extend_from_slice(&IANA_SAMPLING_INTERVAL.to_be_bytes());
+        pkt2.extend_from_slice(&4u16.to_be_bytes());
+
+        // Options data flowset (id=700): scope(4) + rate 1000 (4)
+        let od_len = 4 + 4 + 4;
+        pkt2.extend_from_slice(&opts_tmpl_id.to_be_bytes());
+        pkt2.extend_from_slice(&(od_len as u16).to_be_bytes());
+        pkt2.extend_from_slice(&0u32.to_be_bytes()); // scope value
+        pkt2.extend_from_slice(&1000u32.to_be_bytes()); // samplingInterval
+
+        let flows = parse_packet(&pkt2, &mut cache, exporter).expect("v9 options parse");
+        assert!(flows.is_empty()); // options data produces no flows
+
+        // Now a data record: counters scaled ×1000
+        let pkt3 = build_v9_packet([192, 168, 1, 10], [8, 8, 8, 8], 100, 10);
+        let flows = parse_packet(&pkt3, &mut cache, exporter).expect("v9 scaled parse");
+        assert_eq!(flows[0].bytes, 100_000);
+        assert_eq!(flows[0].packets, 10_000);
+        assert_eq!(flows[0].sampling_rate, 1000);
+    }
+
+    #[test]
+    fn test_ipfix_options_template_sampling() {
+        // samplingPacketInterval=1, samplingPacketSpace=999 → rate 1000
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 7));
+        let mut cache = ThreadLocalTemplateCache::new();
+
+        let opts_tmpl_id: u16 = 800;
+        // Options template set (id=3): tmpl_id + field_count=3 + scope_count=1,
+        // fields: scope obsDomain(149,4), pktInterval(305,4), pktSpace(306,4)
+        let ots_len = 4 + 6 + 3 * 4;
+        // Options data set: scope(4) + interval(4) + space(4)
+        let od_len = 4 + 12;
+        let total = 16 + ots_len + od_len;
+
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&(total as u16).to_be_bytes());
+        pkt.extend_from_slice(&1700000000u32.to_be_bytes());
+        pkt.extend_from_slice(&1u32.to_be_bytes());
+        pkt.extend_from_slice(&100u32.to_be_bytes());
+
+        pkt.extend_from_slice(&3u16.to_be_bytes());
+        pkt.extend_from_slice(&(ots_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&opts_tmpl_id.to_be_bytes());
+        pkt.extend_from_slice(&3u16.to_be_bytes()); // field_count
+        pkt.extend_from_slice(&1u16.to_be_bytes()); // scope_field_count
+        pkt.extend_from_slice(&149u16.to_be_bytes()); // scope: observationDomainId
+        pkt.extend_from_slice(&4u16.to_be_bytes());
+        pkt.extend_from_slice(&IANA_SAMPLING_PKT_INTERVAL.to_be_bytes());
+        pkt.extend_from_slice(&4u16.to_be_bytes());
+        pkt.extend_from_slice(&IANA_SAMPLING_PKT_SPACE.to_be_bytes());
+        pkt.extend_from_slice(&4u16.to_be_bytes());
+
+        pkt.extend_from_slice(&opts_tmpl_id.to_be_bytes());
+        pkt.extend_from_slice(&(od_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&100u32.to_be_bytes()); // scope value
+        pkt.extend_from_slice(&1u32.to_be_bytes()); // interval
+        pkt.extend_from_slice(&999u32.to_be_bytes()); // space
+
+        let flows = parse_packet(&pkt, &mut cache, exporter).expect("ipfix options parse");
+        assert!(flows.is_empty());
+
+        // Regular IPFIX flow from the same observation domain gets scaled
+        let pkt2 = build_ipfix_packet([10, 0, 1, 5], [1, 1, 1, 1], 50, 5);
+        let flows = parse_packet(&pkt2, &mut cache, exporter).expect("ipfix scaled parse");
+        assert_eq!(flows[0].bytes, 50_000);
+        assert_eq!(flows[0].packets, 5_000);
+        assert_eq!(flows[0].sampling_rate, 1000);
     }
 
     #[test]

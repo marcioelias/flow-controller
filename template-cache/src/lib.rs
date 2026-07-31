@@ -22,6 +22,11 @@ pub struct TemplateField {
 pub struct Template {
     pub key: TemplateKey,
     pub fields: Vec<TemplateField>,
+    /// Options templates (v9 flowset 1 / IPFIX set 3) describe metadata
+    /// records (e.g. sampling rate), not flows
+    pub is_options: bool,
+    /// Number of scope fields at the start of `fields` (options templates only)
+    pub scope_field_count: u16,
     /// Collector wall-clock time of the last (re)insert — used for expiration.
     /// Stamped locally on insert; the exporter's own clock is not trusted here
     /// because skew would make fresh templates look ancient.
@@ -32,6 +37,9 @@ pub struct Template {
 /// Because Dispatcher hashes packets by exporter IP, worker threads don't need locks around this structure.
 pub struct ThreadLocalTemplateCache {
     cache: HashMap<TemplateKey, Template, RandomState>,
+    /// Sampling rate learned from options data records, per (exporter, source_id).
+    /// 1 = unsampled / not learned yet.
+    sampling_rates: HashMap<(Ipv4Addr, u32), u32, RandomState>,
 }
 
 impl Default for ThreadLocalTemplateCache {
@@ -44,7 +52,37 @@ impl ThreadLocalTemplateCache {
     pub fn new() -> Self {
         Self {
             cache: HashMap::with_hasher(RandomState::new()),
+            sampling_rates: HashMap::with_hasher(RandomState::new()),
         }
+    }
+
+    /// Current sampling rate for an observation domain (1 = unsampled)
+    pub fn sampling_rate(&self, exporter_ip: Ipv4Addr, source_id: u32) -> u32 {
+        self.sampling_rates
+            .get(&(exporter_ip, source_id))
+            .copied()
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    /// Record a sampling rate learned from an options data record.
+    /// Logs when the rate is first learned or changes.
+    pub fn set_sampling_rate(&mut self, exporter_ip: Ipv4Addr, source_id: u32, rate: u32) {
+        let rate = rate.max(1);
+        let prev = self.sampling_rates.insert((exporter_ip, source_id), rate);
+        if prev != Some(rate) {
+            tracing::info!(
+                "Sampling rate for exporter {} (domain {}): 1:{}",
+                exporter_ip,
+                source_id,
+                rate
+            );
+        }
+    }
+
+    /// Iterate learned sampling rates (for metrics export)
+    pub fn sampling_rates(&self) -> impl Iterator<Item = (&(Ipv4Addr, u32), &u32)> {
+        self.sampling_rates.iter()
     }
 
     pub fn get(&self, key: &TemplateKey) -> Option<&Template> {

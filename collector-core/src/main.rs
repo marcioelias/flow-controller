@@ -1039,6 +1039,12 @@ fn worker_loop(
             worker_metrics
                 .template_cache_size
                 .set(templates.len() as i64);
+            for ((exp_ip, domain), rate) in templates.sampling_rates() {
+                worker_metrics
+                    .exporter_sampling_rate
+                    .with_label_values(&[&exp_ip.to_string(), &domain.to_string()])
+                    .set(*rate as i64);
+            }
             worker_metrics
                 .export_queue_depth
                 .set(export_tx.len() as i64);
