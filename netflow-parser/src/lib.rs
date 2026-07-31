@@ -77,13 +77,18 @@ pub const IANA_BGP_DST_ASN: u16 = 17;
 pub const IANA_IPV6_SRC_ADDR: u16 = 27;
 pub const IANA_IPV6_DST_ADDR: u16 = 28;
 
+/// IPFIX variable-length field marker (RFC 7011 §7): actual length is a
+/// per-record prefix, not part of the template.
+pub const VARLEN: u16 = 0xFFFF;
+
 #[inline]
 fn read_uint(bytes: &[u8]) -> u64 {
-    let mut res = 0u64;
-    for &b in bytes {
-        res = (res << 8) | (b as u64);
-    }
-    res
+    // Fields wider than 8 bytes are not numeric counters we understand;
+    // take the low-order 8 bytes rather than silently shifting them out.
+    let start = bytes.len().saturating_sub(8);
+    bytes[start..]
+        .iter()
+        .fold(0u64, |acc, &b| (acc << 8) | b as u64)
 }
 
 // ─── Shared template/data set parsers ────────────────────────────────────────
@@ -111,7 +116,10 @@ fn parse_template_set(
         let field_count = u16::from_be_bytes([set_data[ptr + 2], set_data[ptr + 3]]) as usize;
         ptr += 4;
 
-        let mut fields = Vec::with_capacity(field_count);
+        // field_count comes off the wire — clamp the allocation to what the
+        // remaining bytes could actually describe (4 bytes per field entry)
+        let max_possible = (set_data.len() - ptr) / 4;
+        let mut fields = Vec::with_capacity(field_count.min(max_possible));
         for _ in 0..field_count {
             if ptr + 4 > set_data.len() {
                 break;
@@ -146,6 +154,78 @@ fn parse_template_set(
     }
 }
 
+#[inline]
+fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFlow {
+    NormalizedFlow {
+        timestamp: export_time as u64,
+        exporter_ip,
+        src_ip: flow_types::IpAddrType::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        dst_ip: flow_types::IpAddrType::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        src_port: 0,
+        dst_port: 0,
+        protocol: 0,
+        bytes: 0,
+        packets: 0,
+        src_asn: 0,
+        dst_asn: 0,
+        ingress_interface: 0,
+        egress_interface: 0,
+        tcp_flags: 0,
+    }
+}
+
+#[inline]
+fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8]) {
+    let f_len = field_data.len();
+    match field_type {
+        IANA_IN_BYTES => flow.bytes = read_uint(field_data),
+        IANA_IN_PKTS => flow.packets = read_uint(field_data),
+        IANA_PROTOCOL => {
+            if f_len == 1 {
+                flow.protocol = field_data[0];
+            }
+        }
+        IANA_TCP_FLAGS => {
+            if f_len > 0 {
+                flow.tcp_flags = field_data[f_len - 1];
+            }
+        }
+        IANA_L4_SRC_PORT => flow.src_port = read_uint(field_data) as u16,
+        IANA_L4_DST_PORT => flow.dst_port = read_uint(field_data) as u16,
+        IANA_IPV4_SRC_ADDR => {
+            if f_len == 4 {
+                let mut arr = [0u8; 4];
+                arr.copy_from_slice(field_data);
+                flow.src_ip = flow_types::IpAddrType::V4(std::net::Ipv4Addr::from(arr));
+            }
+        }
+        IANA_IPV4_DST_ADDR => {
+            if f_len == 4 {
+                let mut arr = [0u8; 4];
+                arr.copy_from_slice(field_data);
+                flow.dst_ip = flow_types::IpAddrType::V4(std::net::Ipv4Addr::from(arr));
+            }
+        }
+        IANA_IPV6_SRC_ADDR => {
+            if f_len == 16 {
+                let mut arr = [0u8; 16];
+                arr.copy_from_slice(field_data);
+                flow.src_ip = flow_types::IpAddrType::V6(std::net::Ipv6Addr::from(arr));
+            }
+        }
+        IANA_IPV6_DST_ADDR => {
+            if f_len == 16 {
+                let mut arr = [0u8; 16];
+                arr.copy_from_slice(field_data);
+                flow.dst_ip = flow_types::IpAddrType::V6(std::net::Ipv6Addr::from(arr));
+            }
+        }
+        IANA_BGP_SRC_ASN => flow.src_asn = read_uint(field_data) as u32,
+        IANA_BGP_DST_ASN => flow.dst_asn = read_uint(field_data) as u32,
+        _ => {}
+    }
+}
+
 /// Parse a data set and return decoded NormalizedFlow records.
 fn parse_data_set(
     set_data: &[u8],
@@ -166,6 +246,10 @@ fn parse_data_set(
         None => return vec![],
     };
 
+    if template.fields.iter().any(|f| f.length == VARLEN) {
+        return parse_varlen_records(set_data, template, export_time, exporter_ip);
+    }
+
     let record_size: usize = template.fields.iter().map(|f| f.length as usize).sum();
     if record_size == 0 {
         return vec![];
@@ -175,22 +259,7 @@ fn parse_data_set(
     let mut d_ptr = 0usize;
 
     while d_ptr + record_size <= set_data.len() {
-        let mut flow = NormalizedFlow {
-            timestamp: export_time as u64,
-            exporter_ip,
-            src_ip: flow_types::IpAddrType::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
-            dst_ip: flow_types::IpAddrType::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
-            src_port: 0,
-            dst_port: 0,
-            protocol: 0,
-            bytes: 0,
-            packets: 0,
-            src_asn: 0,
-            dst_asn: 0,
-            ingress_interface: 0,
-            egress_interface: 0,
-            tcp_flags: 0,
-        };
+        let mut flow = empty_flow(export_time, exporter_ip);
 
         let mut f_ptr = d_ptr;
         for field in &template.fields {
@@ -198,60 +267,82 @@ fn parse_data_set(
             if f_ptr + f_len > set_data.len() {
                 break;
             }
-            let field_data = &set_data[f_ptr..f_ptr + f_len];
-
-            match field.field_type {
-                IANA_IN_BYTES => flow.bytes = read_uint(field_data),
-                IANA_IN_PKTS => flow.packets = read_uint(field_data),
-                IANA_PROTOCOL => {
-                    if f_len == 1 {
-                        flow.protocol = field_data[0];
-                    }
-                }
-                IANA_TCP_FLAGS => {
-                    if f_len > 0 {
-                        flow.tcp_flags = field_data[f_len - 1];
-                    }
-                }
-                IANA_L4_SRC_PORT => flow.src_port = read_uint(field_data) as u16,
-                IANA_L4_DST_PORT => flow.dst_port = read_uint(field_data) as u16,
-                IANA_IPV4_SRC_ADDR => {
-                    if f_len == 4 {
-                        let mut arr = [0u8; 4];
-                        arr.copy_from_slice(field_data);
-                        flow.src_ip = flow_types::IpAddrType::V4(std::net::Ipv4Addr::from(arr));
-                    }
-                }
-                IANA_IPV4_DST_ADDR => {
-                    if f_len == 4 {
-                        let mut arr = [0u8; 4];
-                        arr.copy_from_slice(field_data);
-                        flow.dst_ip = flow_types::IpAddrType::V4(std::net::Ipv4Addr::from(arr));
-                    }
-                }
-                IANA_IPV6_SRC_ADDR => {
-                    if f_len == 16 {
-                        let mut arr = [0u8; 16];
-                        arr.copy_from_slice(field_data);
-                        flow.src_ip = flow_types::IpAddrType::V6(std::net::Ipv6Addr::from(arr));
-                    }
-                }
-                IANA_IPV6_DST_ADDR => {
-                    if f_len == 16 {
-                        let mut arr = [0u8; 16];
-                        arr.copy_from_slice(field_data);
-                        flow.dst_ip = flow_types::IpAddrType::V6(std::net::Ipv6Addr::from(arr));
-                    }
-                }
-                IANA_BGP_SRC_ASN => flow.src_asn = read_uint(field_data) as u32,
-                IANA_BGP_DST_ASN => flow.dst_asn = read_uint(field_data) as u32,
-                _ => {}
-            }
+            decode_field(&mut flow, field.field_type, &set_data[f_ptr..f_ptr + f_len]);
             f_ptr += f_len;
         }
 
         flows.push(flow);
         d_ptr += record_size;
+    }
+
+    flows
+}
+
+/// Data set whose template contains variable-length IEs (RFC 7011 §7):
+/// record boundaries can only be found by walking each record field by field,
+/// reading the 1-byte (or 255 + 2-byte) length prefix of every varlen field.
+/// Varlen values themselves are not among the IANA IDs we decode — they are
+/// skipped — but the fixed-length fields around them parse normally.
+fn parse_varlen_records(
+    set_data: &[u8],
+    template: &template_cache::Template,
+    export_time: u32,
+    exporter_ip: std::net::Ipv4Addr,
+) -> Vec<NormalizedFlow> {
+    // Smallest possible record: fixed lengths + 1 prefix byte per varlen field.
+    // Anything shorter at the tail is set padding, not a record.
+    let min_record: usize = template
+        .fields
+        .iter()
+        .map(|f| {
+            if f.length == VARLEN {
+                1
+            } else {
+                f.length as usize
+            }
+        })
+        .sum();
+    if min_record == 0 {
+        return vec![];
+    }
+
+    let mut flows = Vec::new();
+    let mut d_ptr = 0usize;
+
+    'records: while d_ptr + min_record <= set_data.len() {
+        let mut flow = empty_flow(export_time, exporter_ip);
+
+        let mut f_ptr = d_ptr;
+        for field in &template.fields {
+            let f_len = if field.length == VARLEN {
+                if f_ptr >= set_data.len() {
+                    break 'records;
+                }
+                let short = set_data[f_ptr] as usize;
+                f_ptr += 1;
+                if short == 255 {
+                    if f_ptr + 2 > set_data.len() {
+                        break 'records;
+                    }
+                    let long = u16::from_be_bytes([set_data[f_ptr], set_data[f_ptr + 1]]) as usize;
+                    f_ptr += 2;
+                    long
+                } else {
+                    short
+                }
+            } else {
+                field.length as usize
+            };
+
+            if f_ptr + f_len > set_data.len() {
+                break 'records;
+            }
+            decode_field(&mut flow, field.field_type, &set_data[f_ptr..f_ptr + f_len]);
+            f_ptr += f_len;
+        }
+
+        flows.push(flow);
+        d_ptr = f_ptr;
     }
 
     flows
@@ -595,6 +686,83 @@ mod tests {
 
         assert_eq!(flows.len(), 1);
         assert_eq!(flows[0].bytes, 9999);
+    }
+
+    #[test]
+    fn test_ipfix_varlen_field_skipped() {
+        // Template: varlen field (e.g. applicationName) + IN_BYTES(8)
+        let template_id: u16 = 500;
+        let tmpl_set_len = 4 + 4 + 4 + 4; // set hdr + tmpl hdr + 2 fields
+                                          // Record: varlen prefix (1) + 3 bytes payload + 8 bytes IN_BYTES
+        let data_set_len = 4 + 1 + 3 + 8;
+        let total_len = 16 + tmpl_set_len + data_set_len;
+
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&(total_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&1700000000u32.to_be_bytes());
+        pkt.extend_from_slice(&1u32.to_be_bytes());
+        pkt.extend_from_slice(&300u32.to_be_bytes());
+
+        // Template set: field 96 (applicationName) varlen + IN_BYTES fixed 8
+        pkt.extend_from_slice(&2u16.to_be_bytes());
+        pkt.extend_from_slice(&(tmpl_set_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&2u16.to_be_bytes());
+        pkt.extend_from_slice(&96u16.to_be_bytes());
+        pkt.extend_from_slice(&VARLEN.to_be_bytes());
+        pkt.extend_from_slice(&IANA_IN_BYTES.to_be_bytes());
+        pkt.extend_from_slice(&8u16.to_be_bytes());
+
+        // Data set: varlen "abc" + bytes=7777
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(data_set_len as u16).to_be_bytes());
+        pkt.push(3u8); // varlen prefix
+        pkt.extend_from_slice(b"abc");
+        pkt.extend_from_slice(&7777u64.to_be_bytes());
+
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 4));
+        let mut cache = ThreadLocalTemplateCache::new();
+        let flows = parse_packet(&pkt, &mut cache, exporter).expect("varlen parse failed");
+
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].bytes, 7777);
+    }
+
+    #[test]
+    fn test_read_uint_oversized_field() {
+        // 12-byte field: high 4 bytes must be ignored, low 8 kept
+        let mut data = vec![0xFFu8, 0xFF, 0xFF, 0xFF];
+        data.extend_from_slice(&42u64.to_be_bytes());
+        assert_eq!(read_uint(&data), 42);
+    }
+
+    #[test]
+    fn test_template_field_count_clamped() {
+        // Template claiming 65535 fields inside a 20-byte set must neither
+        // over-allocate nor panic
+        let template_id: u16 = 600;
+        let tmpl_set_len = 4 + 4 + 4; // room for a single field entry
+        let total_len = 16 + tmpl_set_len;
+
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&(total_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&1700000000u32.to_be_bytes());
+        pkt.extend_from_slice(&1u32.to_be_bytes());
+        pkt.extend_from_slice(&400u32.to_be_bytes());
+
+        pkt.extend_from_slice(&2u16.to_be_bytes());
+        pkt.extend_from_slice(&(tmpl_set_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&65535u16.to_be_bytes()); // absurd field_count
+        pkt.extend_from_slice(&IANA_IN_BYTES.to_be_bytes());
+        pkt.extend_from_slice(&8u16.to_be_bytes());
+
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 5));
+        let mut cache = ThreadLocalTemplateCache::new();
+        let result = parse_packet(&pkt, &mut cache, exporter);
+        assert!(result.is_ok());
     }
 
     #[test]
