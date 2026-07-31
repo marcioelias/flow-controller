@@ -29,7 +29,6 @@ use dashmap::DashSet;
 use flume::{Receiver, Sender};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -697,8 +696,10 @@ fn main() -> anyhow::Result<()> {
     // Spawn async ClickHouse Exporter Task
     let exporter_clone = Arc::clone(&exporter_client);
     let ml_tx_ch = ml_tx.clone();
+    let exporter_metrics = collector_metrics.clone();
     rt.spawn(async move {
         tracing::info!("Clickhouse Exporter background task started.");
+        let mut last_ml_drop_warn = Instant::now() - Duration::from_secs(10);
         while let Ok(window) = export_rx.recv_async().await {
             let mut v4_batch = Vec::new();
             let mut v6_batch = Vec::new();
@@ -709,8 +710,12 @@ fn main() -> anyhow::Result<()> {
 
             // Extract ML features before consuming the map
             let ml_features = features::extract(now, &map);
-            if !ml_features.is_empty() {
-                let _ = ml_tx_ch.try_send(ml_features);
+            if !ml_features.is_empty() && ml_tx_ch.try_send(ml_features).is_err() {
+                exporter_metrics.ml_windows_dropped.inc();
+                if last_ml_drop_warn.elapsed() >= Duration::from_secs(10) {
+                    tracing::warn!("ML queue full — dropping feature batch");
+                    last_ml_drop_warn = Instant::now();
+                }
             }
 
             let mut batch_total_bytes = 0;
@@ -763,8 +768,12 @@ fn main() -> anyhow::Result<()> {
             }
 
             if let Err(e) = exporter_clone.insert_batch(&v4_batch, &v6_batch).await {
+                exporter_metrics.clickhouse_insert_errors.inc();
                 tracing::error!("Failed to insert batch to ClickHouse: {}", e);
             } else {
+                exporter_metrics
+                    .clickhouse_rows_inserted
+                    .inc_by((v4_batch.len() + v6_batch.len()) as u64);
                 tracing::debug!(
                     "Inserted batches (v4: {}, v6: {}) to ClickHouse.",
                     v4_batch.len(),
@@ -816,9 +825,6 @@ fn main() -> anyhow::Result<()> {
         worker_count
     );
 
-    let dropped_packets = Arc::new(AtomicUsize::new(0));
-    let blocked_packets = Arc::new(AtomicUsize::new(0));
-
     let mut buf = [0u8; UDP_BUFFER_SIZE];
     loop {
         match udp_socket.recv_from(&mut buf) {
@@ -830,7 +836,8 @@ fn main() -> anyhow::Result<()> {
                 };
 
                 if !is_allowed {
-                    let count = blocked_packets.fetch_add(1, Ordering::Relaxed);
+                    let count = collector_metrics.packets_blocked.get();
+                    collector_metrics.packets_blocked.inc();
                     if count.is_multiple_of(1000) {
                         tracing::warn!(
                             "Blocked {} packets from unauthorized exporter: {}",
@@ -855,12 +862,13 @@ fn main() -> anyhow::Result<()> {
                     data: buf[..size].to_vec(),
                 };
 
+                collector_metrics.packets_received.inc();
+                // DEPRECATED alias — remove once dashboards migrate
                 collector_metrics.flows_received.inc();
 
                 if let Err(flume::TrySendError::Full(_)) =
                     worker_senders[worker_idx].try_send(payload)
                 {
-                    dropped_packets.fetch_add(1, Ordering::Relaxed);
                     collector_metrics.packets_dropped.inc();
                 }
             }
@@ -881,6 +889,7 @@ fn worker_loop(
     let mut templates = ThreadLocalTemplateCache::new();
     let mut aggregator = ThreadLocalAggregator::new();
     let mut last_flush = Instant::now();
+    let mut last_drop_warn = Instant::now() - Duration::from_secs(10);
 
     loop {
         // Timed receive so the flush below runs even when no packets arrive —
@@ -935,7 +944,7 @@ fn worker_loop(
                     }
                 }
                 Err(_) => {
-                    worker_metrics.packets_dropped.inc();
+                    worker_metrics.parse_errors.inc();
                 }
             }
         }
@@ -944,12 +953,25 @@ fn worker_loop(
             worker_metrics
                 .template_cache_size
                 .set(templates.len() as i64);
+            worker_metrics
+                .export_queue_depth
+                .set(export_tx.len() as i64);
             let map = aggregator.flush_window();
-            if !map.is_empty() {
-                let _ = export_tx.try_send(FlowWindow {
-                    window_ts: unix_now_secs(),
-                    map,
-                });
+            if !map.is_empty()
+                && export_tx
+                    .try_send(FlowWindow {
+                        window_ts: unix_now_secs(),
+                        map,
+                    })
+                    .is_err()
+            {
+                // A full export queue means a whole second of aggregated
+                // traffic from this worker is lost — make it visible.
+                worker_metrics.export_windows_dropped.inc();
+                if last_drop_warn.elapsed() >= Duration::from_secs(10) {
+                    tracing::warn!("worker {}: export queue full — dropping window", id);
+                    last_drop_warn = Instant::now();
+                }
             }
             last_flush = Instant::now();
         }
