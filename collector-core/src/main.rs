@@ -767,7 +767,10 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            if let Err(e) = exporter_clone.insert_batch(&v4_batch, &v6_batch).await {
+            if let Err(e) = exporter_clone
+                .insert_batch_with_retry(&v4_batch, &v6_batch, 4)
+                .await
+            {
                 exporter_metrics.clickhouse_insert_errors.inc();
                 tracing::error!("Failed to insert batch to ClickHouse: {}", e);
             } else {

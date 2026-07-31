@@ -177,6 +177,33 @@ impl ClickhouseExporter {
         Ok(())
     }
 
+    /// Inserts with exponential backoff on transient failures.
+    ///
+    /// Retrying may duplicate rows if ClickHouse committed a batch but the
+    /// response was lost; for traffic accounting that beats silent loss.
+    pub async fn insert_batch_with_retry(
+        &self,
+        v4_batch: &[NetworkFlowV4Row],
+        v6_batch: &[NetworkFlowV6Row],
+        max_attempts: u32,
+    ) -> Result<()> {
+        let mut delay = std::time::Duration::from_millis(250);
+        for attempt in 1..=max_attempts {
+            match self.insert_batch(v4_batch, v6_batch).await {
+                Ok(()) => return Ok(()),
+                Err(e) if attempt == max_attempts => return Err(e),
+                Err(e) => {
+                    tracing::warn!(
+                        "ClickHouse insert attempt {attempt}/{max_attempts} failed: {e}; retrying in {delay:?}"
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(std::time::Duration::from_secs(4));
+                }
+            }
+        }
+        unreachable!("max_attempts >= 1")
+    }
+
     /// Inserts a batch of IPv4 flows and IPv6 flows
     pub async fn insert_batch(
         &self,
