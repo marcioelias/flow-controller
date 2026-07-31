@@ -289,7 +289,7 @@ parsing.
 
 ---
 
-## Phase 11 — Traffic Direction & Mirrored Charts 🔲
+## Phase 11 — Traffic Direction & Mirrored Charts ✅
 **Effort:** ~1 dia  |  **Files touched:** `netflow-parser/`, `flow-types/`, `aggregator/`, `collector-core/src/`, `frontend/src/`
 
 Hoje o sistema não diferencia inbound de outbound — tudo é somado. Exporters
@@ -299,13 +299,13 @@ IE 10/14), sem fallback por posse de IP/ASN nesta fase.
 
 | Task | Spec file | Status |
 |------|-----------|--------|
-| 11.1 Direção do flow ponta a ponta (parser → ClickHouse) | `tasks/task-11.1-flow-direction.md` | 🔲 |
-| 11.2 Stats API com séries por direção (`sumIf`) | `tasks/task-11.2-direction-stats-api.md` | 🔲 |
-| 11.3 Gráficos espelhados (in acima, out abaixo) | `tasks/task-11.3-mirrored-charts.md` | 🔲 |
+| 11.1 Direção do flow ponta a ponta (parser → ClickHouse) | `tasks/task-11.1-flow-direction.md` | ✅ |
+| 11.2 Stats API com séries por direção (`sumIf`) | `tasks/task-11.2-direction-stats-api.md` | ✅ |
+| 11.3 Gráficos espelhados (in acima, out abaixo) | `tasks/task-11.3-mirrored-charts.md` | ✅ |
 
 ---
 
-## Phase 12 — NOC Dashboard 🔲
+## Phase 12 — NOC Dashboard ✅
 **Effort:** ~1.5 dias  |  **Files touched:** `collector-core/src/stats.rs`, `frontend/src/`
 
 Revamp do dashboard principal como painel de NOC: stat tiles (bps in/out, pico,
@@ -315,8 +315,8 @@ coletor) e heatmap hora×dia.
 
 | Task | Spec file | Status |
 |------|-----------|--------|
-| 12.1 NOC overview API (`GET /api/stats/overview`) | `tasks/task-12.1-noc-overview-api.md` | 🔲 |
-| 12.2 Dashboard NOC (frontend) | `tasks/task-12.2-noc-dashboard.md` | 🔲 |
+| 12.1 NOC overview API (`GET /api/stats/overview`) | `tasks/task-12.1-noc-overview-api.md` | ✅ |
+| 12.2 Dashboard NOC (frontend) | `tasks/task-12.2-noc-dashboard.md` | ✅ |
 
 Depende da Fase 11 (séries por direção alimentam tiles e gráfico espelhado).
 
