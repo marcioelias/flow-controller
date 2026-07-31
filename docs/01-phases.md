@@ -246,7 +246,7 @@ Ollama é opcional — sem `LLM_ENABLED=true` o serviço não é iniciado.
 
 ---
 
-## Phase 10 — Collector Performance & Robustness 🔲
+## Phase 10 — Collector Performance & Robustness ✅
 **Effort:** ~2 dias  |  **Files touched:** `collector-core/src/`, `netflow-parser/`, `template-cache/`, `aggregator/`, `clickhouse-exporter/`
 
 Auditoria do caminho quente (recepção UDP → parse → agregação → ClickHouse). As fases
@@ -255,18 +255,18 @@ robustez do parser sob templates inesperados.
 
 | Task | Spec file | Status |
 |------|-----------|--------|
-| 10.1 Flush determinístico + timestamp real da janela | `tasks/task-10.1-window-flush.md` | 🔲 |
-| 10.2 Métricas de backpressure e precisão dos contadores | `tasks/task-10.2-backpressure-metrics.md` | 🔲 |
-| 10.3 Retry com backoff no insert ClickHouse | `tasks/task-10.3-clickhouse-retry.md` | 🔲 |
-| 10.4 Poda do cache de templates | `tasks/task-10.4-template-pruning.md` | 🔲 |
-| 10.5 Amostragem no produtor do Debug Console | `tasks/task-10.5-debug-sampling.md` | 🔲 |
-| 10.6 Limites de fila + backoff em erro de recv | `tasks/task-10.6-queue-bounds.md` | 🔲 |
-| 10.7 Múltiplos receptores UDP via SO_REUSEPORT | `tasks/task-10.7-reuseport-receivers.md` | 🔲 |
-| 10.8 Robustez do parser (varlen IE, read_uint, capacity) | `tasks/task-10.8-parser-robustness.md` | 🔲 |
-| 10.9 Extração de features fora do runtime async | `tasks/task-10.9-feature-extraction-offload.md` | 🔲 |
-| 10.10 Suporte a sampling interval (options templates) | `tasks/task-10.10-sampling-interval.md` | 🔲 |
-| 10.11 Merge de janelas antes do insert | `tasks/task-10.11-batch-merge.md` | 🔲 |
-| 10.12 Colunas IPv4/IPv6 nativas ⚠️ requer migração | `tasks/task-10.12-native-ip-columns.md` | 🔲 |
+| 10.1 Flush determinístico + timestamp real da janela | `tasks/task-10.1-window-flush.md` | ✅ |
+| 10.2 Métricas de backpressure e precisão dos contadores | `tasks/task-10.2-backpressure-metrics.md` | ✅ |
+| 10.3 Retry com backoff no insert ClickHouse | `tasks/task-10.3-clickhouse-retry.md` | ✅ |
+| 10.4 Poda do cache de templates | `tasks/task-10.4-template-pruning.md` | ✅ |
+| 10.5 Amostragem no produtor do Debug Console | `tasks/task-10.5-debug-sampling.md` | ✅ |
+| 10.6 Limites de fila + backoff em erro de recv | `tasks/task-10.6-queue-bounds.md` | ✅ |
+| 10.7 Múltiplos receptores UDP via SO_REUSEPORT | `tasks/task-10.7-reuseport-receivers.md` | ✅ |
+| 10.8 Robustez do parser (varlen IE, read_uint, capacity) | `tasks/task-10.8-parser-robustness.md` | ✅ |
+| 10.9 Extração de features fora do runtime async | `tasks/task-10.9-feature-extraction-offload.md` | ✅ |
+| 10.10 Suporte a sampling interval (options templates) | `tasks/task-10.10-sampling-interval.md` | ✅ |
+| 10.11 Merge de janelas antes do insert | `tasks/task-10.11-batch-merge.md` | ✅ |
+| 10.12 Colunas IPv4/IPv6 nativas ⚠️ requer migração | `tasks/task-10.12-native-ip-columns.md` | ✅ |
 
 ### Severidade
 
@@ -302,6 +302,23 @@ IE 10/14), sem fallback por posse de IP/ASN nesta fase.
 | 11.1 Direção do flow ponta a ponta (parser → ClickHouse) | `tasks/task-11.1-flow-direction.md` | 🔲 |
 | 11.2 Stats API com séries por direção (`sumIf`) | `tasks/task-11.2-direction-stats-api.md` | 🔲 |
 | 11.3 Gráficos espelhados (in acima, out abaixo) | `tasks/task-11.3-mirrored-charts.md` | 🔲 |
+
+---
+
+## Phase 12 — NOC Dashboard 🔲
+**Effort:** ~1.5 dias  |  **Files touched:** `collector-core/src/stats.rs`, `frontend/src/`
+
+Revamp do dashboard principal como painel de NOC: stat tiles (bps in/out, pico,
+95º percentil, flows/s, talkers, exporters, alertas), gráfico espelhado principal,
+donut de protocolos, top talkers/ASN, estado operacional (alertas, BGP, saúde do
+coletor) e heatmap hora×dia.
+
+| Task | Spec file | Status |
+|------|-----------|--------|
+| 12.1 NOC overview API (`GET /api/stats/overview`) | `tasks/task-12.1-noc-overview-api.md` | 🔲 |
+| 12.2 Dashboard NOC (frontend) | `tasks/task-12.2-noc-dashboard.md` | 🔲 |
+
+Depende da Fase 11 (séries por direção alimentam tiles e gráfico espelhado).
 
 ---
 
