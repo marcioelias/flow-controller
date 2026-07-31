@@ -305,7 +305,9 @@ async fn fetch_clickhouse_version(url: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 const UDP_BUFFER_SIZE: usize = 65536;
-const QUEUE_CAPACITY: usize = 1_000_000;
+// Bounded by count, not bytes: 65k × ~1400 B ≈ 90 MB/worker worst case.
+// Shedding early under overload beats growing RSS until the OOM killer acts.
+const DEFAULT_QUEUE_CAPACITY: usize = 65_536;
 const FLUSH_INTERVAL_SECS: u64 = 1;
 // Well beyond any standard template refresh interval (v9 default is minutes)
 const TEMPLATE_MAX_AGE_SECS: u64 = 3600;
@@ -443,6 +445,14 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or(4)
         .clamp(1, 64);
     tracing::info!("Collector worker threads: {}", worker_count);
+
+    // Per-worker packet queue depth (count-bounded; see DEFAULT_QUEUE_CAPACITY)
+    let queue_capacity: usize = std::env::var("COLLECTOR_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_QUEUE_CAPACITY)
+        .clamp(1024, 4_194_304);
+    tracing::info!("Worker queue capacity: {} packets", queue_capacity);
 
     // Build in-memory whitelist cache (populated before UDP socket binds)
     let allowed_set: AllowedSet = Arc::new(DashSet::new());
@@ -806,7 +816,7 @@ fn main() -> anyhow::Result<()> {
 
     // Spawn Worker Threads
     for worker_id in 0..worker_count {
-        let (tx, rx) = flume::bounded(QUEUE_CAPACITY);
+        let (tx, rx) = flume::bounded(queue_capacity);
         worker_senders.push(tx);
 
         let exp_tx = export_tx.clone();
@@ -882,7 +892,16 @@ fn main() -> anyhow::Result<()> {
                     collector_metrics.packets_dropped.inc();
                 }
             }
-            Err(e) => tracing::error!("UDP recv error: {}", e),
+            // EINTR is routine; anything else gets a backoff so a broken
+            // socket (ENETDOWN, iface removed) can't hot-spin a core while
+            // flooding the log.
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock => continue,
+                _ => {
+                    tracing::error!("UDP recv error: {}", e);
+                    thread::sleep(Duration::from_millis(100));
+                }
+            },
         }
     }
 }
