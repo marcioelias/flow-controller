@@ -60,6 +60,23 @@ Each task file is self-contained and can be handed to an independent agent to im
 | [task-5.2](tasks/task-5.2-docker-hardening.md) | Docker Compose hardening | 30m |
 | [task-5.3](tasks/task-5.3-logging.md) | Structured JSON logging | 30m |
 
+### Phase 10 — Collector Performance & Robustness (requires Phase 9)
+
+| Task | Title | Effort |
+|------|-------|--------|
+| [task-10.1](tasks/task-10.1-window-flush.md) | Deterministic window flush & real window timestamp | 45m |
+| [task-10.2](tasks/task-10.2-backpressure-metrics.md) | Backpressure metrics & counter accuracy | 45m |
+| [task-10.3](tasks/task-10.3-clickhouse-retry.md) | ClickHouse insert retry with backoff | 45m |
+| [task-10.4](tasks/task-10.4-template-pruning.md) | Template cache pruning | 20m |
+| [task-10.5](tasks/task-10.5-debug-sampling.md) | Debug console producer-side sampling | 30m |
+| [task-10.6](tasks/task-10.6-queue-bounds.md) | Bounded queues & UDP recv error backoff | 30m |
+| [task-10.7](tasks/task-10.7-reuseport-receivers.md) | SO_REUSEPORT multi-receiver | 1h |
+| [task-10.8](tasks/task-10.8-parser-robustness.md) | Parser robustness (varlen IE, read_uint, capacity) | 1h |
+| [task-10.9](tasks/task-10.9-feature-extraction-offload.md) | Feature extraction off the async runtime | 30m |
+| [task-10.10](tasks/task-10.10-sampling-interval.md) | Sampling interval support (options templates) | 3h |
+| [task-10.11](tasks/task-10.11-batch-merge.md) | Merge worker windows before inserting | 1h |
+| [task-10.12](tasks/task-10.12-native-ip-columns.md) | Native IPv4/IPv6 columns ⚠️ requires migration | 2h + migration |
+
 ## How to Delegate to an Agent
 
 Each task file contains:

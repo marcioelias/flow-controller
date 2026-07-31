@@ -176,7 +176,7 @@ Integração com ExaBGP para envio de updates BGP (blackhole, mitigação) contr
 
 ---
 
-## Phase 9 — ML Anomaly Detection + LLM Explainability 🔲
+## Phase 9 — ML Anomaly Detection + LLM Explainability ✅
 **Effort:** ~3 dias  |  **Files touched:** `collector-core/src/`, `flow-types/src/`, `frontend/src/`, `docker-compose.yml`
 
 Detecção de anomalias por aprendizado de máquina (Isolation Forest, `linfa`) e explicações
@@ -187,10 +187,10 @@ exfiltração de dados).
 
 | Task | Spec file | Status |
 |------|-----------|--------|
-| 9.1 Feature extractor (aggregated window → ML vector) | `tasks/task-9.1-feature-extractor.md` | 🔲 |
-| 9.2 Isolation Forest (model + training pipeline) | `tasks/task-9.2-isolation-forest.md` | 🔲 |
-| 9.3 LLM explainability (Ollama + qwen2.5:3b) | `tasks/task-9.3-llm-explainability.md` | 🔲 |
-| 9.4 AI Insights Dashboard (frontend) | `tasks/task-9.4-ai-dashboard.md` | 🔲 |
+| 9.1 Feature extractor (aggregated window → ML vector) | `tasks/task-9.1-feature-extractor.md` | ✅ |
+| 9.2 Isolation Forest (model + training pipeline) | `tasks/task-9.2-isolation-forest.md` | ✅ |
+| 9.3 LLM explainability (Ollama + qwen2.5:3b) | `tasks/task-9.3-llm-explainability.md` | ✅ |
+| 9.4 AI Insights Dashboard (frontend) | `tasks/task-9.4-ai-dashboard.md` | ✅ |
 
 ### Como o sistema aprende
 
@@ -246,6 +246,49 @@ Ollama é opcional — sem `LLM_ENABLED=true` o serviço não é iniciado.
 
 ---
 
+## Phase 10 — Collector Performance & Robustness 🔲
+**Effort:** ~2 dias  |  **Files touched:** `collector-core/src/`, `netflow-parser/`, `template-cache/`, `aggregator/`, `clickhouse-exporter/`
+
+Auditoria do caminho quente (recepção UDP → parse → agregação → ClickHouse). As fases
+1–9 entregaram funcionalidade; esta fase trata throughput, perda silenciosa de dados e
+robustez do parser sob templates inesperados.
+
+| Task | Spec file | Status |
+|------|-----------|--------|
+| 10.1 Flush determinístico + timestamp real da janela | `tasks/task-10.1-window-flush.md` | 🔲 |
+| 10.2 Métricas de backpressure e precisão dos contadores | `tasks/task-10.2-backpressure-metrics.md` | 🔲 |
+| 10.3 Retry com backoff no insert ClickHouse | `tasks/task-10.3-clickhouse-retry.md` | 🔲 |
+| 10.4 Poda do cache de templates | `tasks/task-10.4-template-pruning.md` | 🔲 |
+| 10.5 Amostragem no produtor do Debug Console | `tasks/task-10.5-debug-sampling.md` | 🔲 |
+| 10.6 Limites de fila + backoff em erro de recv | `tasks/task-10.6-queue-bounds.md` | 🔲 |
+| 10.7 Múltiplos receptores UDP via SO_REUSEPORT | `tasks/task-10.7-reuseport-receivers.md` | 🔲 |
+| 10.8 Robustez do parser (varlen IE, read_uint, capacity) | `tasks/task-10.8-parser-robustness.md` | 🔲 |
+| 10.9 Extração de features fora do runtime async | `tasks/task-10.9-feature-extraction-offload.md` | 🔲 |
+| 10.10 Suporte a sampling interval (options templates) | `tasks/task-10.10-sampling-interval.md` | 🔲 |
+| 10.11 Merge de janelas antes do insert | `tasks/task-10.11-batch-merge.md` | 🔲 |
+| 10.12 Colunas IPv4/IPv6 nativas ⚠️ requer migração | `tasks/task-10.12-native-ip-columns.md` | 🔲 |
+
+### Severidade
+
+| Grupo | Tasks | Sintoma se não fizer |
+|-------|-------|----------------------|
+| Perda silenciosa de dados | 10.1, 10.2, 10.3 | Janelas somem sem log; timestamps errados na timeline |
+| Vazamento / OOM | 10.4, 10.6 | RSS cresce sem limite; overload vira OOM em vez de shed |
+| Teto de throughput | 10.5, 10.7, 10.9, 10.11 | Um core satura a recepção; abrir o Debug Console degrada a coleta |
+| Correção do parser | 10.8, 10.10 | Exporter com IE varlen não decodifica nada; exporter amostrado reporta 1/1000 do tráfego |
+| Storage / query | 10.12 | 3 allocs por linha; IP como String custa storage e latência de query |
+
+### Limitação conhecida — não coberta nesta fase
+
+O sharding de workers é `hash(exporter_ip) % worker_count`, exigido pelo cache de
+template thread-local. Com **um único exporter**, um worker faz todo o parsing e os
+demais ficam ociosos — cenário comum em ISP com um roteador de borda. Resolver exige
+shardar por `(exporter_ip, source_id)` ou compartilhar o cache atrás de um lock.
+Fica registrado como dívida técnica; a task 10.7 alivia o lado da recepção, não o do
+parsing.
+
+---
+
 ## Dependency Graph
 
 ```
@@ -272,10 +315,18 @@ Phase 1 (fixes)
     ├──► Phase 8 (BGP) — independent, requires Phase 5 (Docker)
     │         8.1 → 8.2 → 8.3 → 8.4 → 8.5 → 8.6
     │
-    └──► Phase 9 (ML) — requires Phase 6
-              9.1 → 9.2 (hot path: features → model)
-              9.2 → 9.3 (optional: LLM explain)
-              9.2 + 9.3 → 9.4 (frontend)
+    ├──► Phase 9 (ML) — requires Phase 6
+    │         9.1 → 9.2 (hot path: features → model)
+    │         9.2 → 9.3 (optional: LLM explain)
+    │         9.2 + 9.3 → 9.4 (frontend)
+    │
+    └──► Phase 10 (perf & robustness) — requires Phase 9
+              10.1 → 10.11        (window_ts é pré-requisito do merge)
+              10.2 → 10.3         (contadores antes do retry)
+              10.4, 10.5, 10.6, 10.8, 10.9 — independentes
+              10.7 — independente, mas medir depois de 10.6
+              10.10 — independente, maior escopo
+              10.12 — por último, requer migração
 ```
 
 ## Agent Assignment
