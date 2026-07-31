@@ -302,6 +302,21 @@ struct PacketPayload {
     pub data: Vec<u8>,
 }
 
+/// One closed 1-second aggregation window, stamped by the worker at flush time.
+/// Carrying the timestamp with the map keeps rows correct even if the window
+/// waits in the export queue before being drained.
+pub struct FlowWindow {
+    pub window_ts: u32,
+    pub map: std::collections::HashMap<AggregationKey, AggregatedMetrics, ahash::RandomState>,
+}
+
+fn unix_now_secs() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as u32
+}
+
 fn init_tracing() {
     let json = std::env::var("LOG_FORMAT").map(|v| v == "json").unwrap_or(false);
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
@@ -604,22 +619,20 @@ fn main() -> anyhow::Result<()> {
         axum::serve(listener, app).await.unwrap();
     });
 
-    let (export_tx, export_rx) = flume::bounded(100);
+    let (export_tx, export_rx) = flume::bounded::<FlowWindow>(100);
 
     // Spawn async ClickHouse Exporter Task
     let exporter_clone = Arc::clone(&exporter_client);
     let ml_tx_ch = ml_tx.clone();
     rt.spawn(async move {
         tracing::info!("Clickhouse Exporter background task started.");
-        while let Ok(map) = export_rx.recv_async().await {
+        while let Ok(window) = export_rx.recv_async().await {
             let mut v4_batch = Vec::new();
             let mut v6_batch = Vec::new();
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as u32;
-
-            let map: std::collections::HashMap<AggregationKey, AggregatedMetrics, ahash::RandomState> = map;
+            // Timestamp of the window itself, not of the drain — a window may sit
+            // in the queue for a while when ClickHouse is slow.
+            let now = window.window_ts;
+            let map = window.map;
 
             // Extract ML features before consuming the map
             let ml_features = features::extract(now, &map);
@@ -770,7 +783,7 @@ fn main() -> anyhow::Result<()> {
 fn worker_loop(
     id: usize,
     rx: Receiver<PacketPayload>,
-    export_tx: Sender<std::collections::HashMap<AggregationKey, AggregatedMetrics, ahash::RandomState>>,
+    export_tx: Sender<FlowWindow>,
     debug_tx: broadcast::Sender<DebugFlow>,
     worker_metrics: Arc<metrics::CollectorMetrics>,
 ) {
@@ -780,49 +793,59 @@ fn worker_loop(
     let mut aggregator = ThreadLocalAggregator::new();
     let mut last_flush = Instant::now();
 
-    while let Ok(payload) = rx.recv() {
-        match parse_packet(&payload.data, &mut templates, payload.exporter_ip) {
-            Ok(parsed_flows) => {
-                worker_metrics.flows_decoded.inc_by(parsed_flows.len() as u64);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as u32;
+    loop {
+        // Timed receive so the flush below runs even when no packets arrive —
+        // otherwise the last partial window of an idle exporter never ships.
+        let received = match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(payload) => Some(payload),
+            Err(flume::RecvTimeoutError::Timeout) => None,
+            Err(flume::RecvTimeoutError::Disconnected) => break,
+        };
 
-                for flow in parsed_flows {
-                    // Emit to debug channel before aggregation (send = never blocks workers)
-                    if debug_tx.receiver_count() > 0 {
-                        let src_ip_str = match flow.src_ip {
-                            flow_types::IpAddrType::V4(a) => a.to_string(),
-                            flow_types::IpAddrType::V6(a) => a.to_string(),
-                        };
-                        let dst_ip_str = match flow.dst_ip {
-                            flow_types::IpAddrType::V4(a) => a.to_string(),
-                            flow_types::IpAddrType::V6(a) => a.to_string(),
-                        };
-                        let _ = debug_tx.send(DebugFlow {
-                            timestamp_sec: now,
-                            exporter_ip:   payload.exporter_ip.to_string(),
-                            src_ip:        src_ip_str,
-                            dst_ip:        dst_ip_str,
-                            src_port:      flow.src_port,
-                            dst_port:      flow.dst_port,
-                            protocol:      flow.protocol,
-                            bytes:         flow.bytes,
-                            packets:       flow.packets,
-                            src_asn:       flow.src_asn,
-                            dst_asn:       flow.dst_asn,
-                            ingress_if:    flow.ingress_interface,
-                            egress_if:     flow.egress_interface,
-                            tcp_flags:     flow.tcp_flags,
-                            flow_count:    1,
-                        });
+        if let Some(payload) = received {
+            match parse_packet(&payload.data, &mut templates, payload.exporter_ip) {
+                Ok(parsed_flows) => {
+                    worker_metrics.flows_decoded.inc_by(parsed_flows.len() as u64);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as u32;
+
+                    for flow in parsed_flows {
+                        // Emit to debug channel before aggregation (send = never blocks workers)
+                        if debug_tx.receiver_count() > 0 {
+                            let src_ip_str = match flow.src_ip {
+                                flow_types::IpAddrType::V4(a) => a.to_string(),
+                                flow_types::IpAddrType::V6(a) => a.to_string(),
+                            };
+                            let dst_ip_str = match flow.dst_ip {
+                                flow_types::IpAddrType::V4(a) => a.to_string(),
+                                flow_types::IpAddrType::V6(a) => a.to_string(),
+                            };
+                            let _ = debug_tx.send(DebugFlow {
+                                timestamp_sec: now,
+                                exporter_ip:   payload.exporter_ip.to_string(),
+                                src_ip:        src_ip_str,
+                                dst_ip:        dst_ip_str,
+                                src_port:      flow.src_port,
+                                dst_port:      flow.dst_port,
+                                protocol:      flow.protocol,
+                                bytes:         flow.bytes,
+                                packets:       flow.packets,
+                                src_asn:       flow.src_asn,
+                                dst_asn:       flow.dst_asn,
+                                ingress_if:    flow.ingress_interface,
+                                egress_if:     flow.egress_interface,
+                                tcp_flags:     flow.tcp_flags,
+                                flow_count:    1,
+                            });
+                        }
+                        aggregator.aggregate(&flow);
                     }
-                    aggregator.aggregate(&flow);
                 }
-            }
-            Err(_) => {
-                worker_metrics.packets_dropped.inc();
+                Err(_) => {
+                    worker_metrics.packets_dropped.inc();
+                }
             }
         }
 
@@ -830,7 +853,10 @@ fn worker_loop(
             worker_metrics.template_cache_size.set(templates.len() as i64);
             let map = aggregator.flush_window();
             if !map.is_empty() {
-                let _ = export_tx.try_send(map);
+                let _ = export_tx.try_send(FlowWindow {
+                    window_ts: unix_now_secs(),
+                    map,
+                });
             }
             last_flush = Instant::now();
         }
