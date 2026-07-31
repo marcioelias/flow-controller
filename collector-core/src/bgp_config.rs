@@ -16,17 +16,12 @@ pub async fn generate_config(pool: &SqlitePool) -> anyhow::Result<String> {
     let mut config = String::new();
     config.push_str("# GERADO AUTOMATICAMENTE — NÃO EDITE\n");
     config.push_str("process flowvision-controller {\n");
-    config.push_str(
-        "    run /bin/sh -c 'while true; do cat /run/exabgp/exabgp.in; done';\n",
-    );
+    config.push_str("    run /bin/sh -c 'while true; do cat /run/exabgp/exabgp.in; done';\n");
     config.push_str("    encoder text;\n");
     config.push_str("}\n\n");
 
     for peer in &peers {
-        config.push_str(&format!(
-            "neighbor {} {{\n",
-            peer.neighbor_ip
-        ));
+        config.push_str(&format!("neighbor {} {{\n", peer.neighbor_ip));
         config.push_str(&format!("    description \"{}\";\n", peer.name));
         config.push_str(&format!("    router-id {};\n", router_id));
         config.push_str(&format!("    local-address {};\n", peer.local_ip));
@@ -48,30 +43,28 @@ pub async fn apply_config(pool: &SqlitePool, config_path: &str) -> anyhow::Resul
     let config = generate_config(pool).await?;
 
     // Count enabled peers
-    let peer_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM bgp_peers WHERE enabled = 1")
-            .fetch_one(pool)
-            .await?;
+    let peer_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bgp_peers WHERE enabled = 1")
+        .fetch_one(pool)
+        .await?;
 
     // Write config file
     tokio::fs::write(config_path, &config).await?;
     tracing::info!("BGP config written to {}", config_path);
 
     // Try to signal exabgp reload via pipe
-    let pipe_path = std::env::var("EXABGP_PIPE_PATH")
-        .unwrap_or_else(|_| "/run/exabgp/exabgp.in".to_string());
+    let pipe_path =
+        std::env::var("EXABGP_PIPE_PATH").unwrap_or_else(|_| "/run/exabgp/exabgp.in".to_string());
 
     let pipe_path_owned = pipe_path.clone();
-    let result =
-        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            use std::io::Write;
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&pipe_path_owned)?;
-            writeln!(f, "restart")?;
-            Ok(())
-        })
-        .await;
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&pipe_path_owned)?;
+        writeln!(f, "restart")?;
+        Ok(())
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => tracing::info!("ExaBGP reload signal sent"),

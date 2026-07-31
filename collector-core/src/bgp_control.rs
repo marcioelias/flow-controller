@@ -56,7 +56,8 @@ pub async fn announce(
     // 5. Write to pipe (non-fatal)
     let pipe_path_owned = pipe_path.to_string();
     let command_owned = command.clone();
-    let result = tokio::task::spawn_blocking(move || write_to_pipe(&pipe_path_owned, &command_owned)).await;
+    let result =
+        tokio::task::spawn_blocking(move || write_to_pipe(&pipe_path_owned, &command_owned)).await;
     match result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => tracing::warn!("BGP pipe write failed: {}", e),
@@ -121,7 +122,8 @@ pub async fn withdraw(
     // 4. Write to pipe (non-fatal)
     let pipe_path_owned = pipe_path.to_string();
     let command_owned = command.clone();
-    let result = tokio::task::spawn_blocking(move || write_to_pipe(&pipe_path_owned, &command_owned)).await;
+    let result =
+        tokio::task::spawn_blocking(move || write_to_pipe(&pipe_path_owned, &command_owned)).await;
     match result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => tracing::warn!("BGP pipe write failed: {}", e),
@@ -129,22 +131,19 @@ pub async fn withdraw(
     }
 
     // 5. Mark withdrawn
-    sqlx::query(
-        "UPDATE bgp_announcements SET withdrawn_at = datetime('now') WHERE id = ?",
-    )
-    .bind(announcement_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE bgp_announcements SET withdrawn_at = datetime('now') WHERE id = ?")
+        .bind(announcement_id)
+        .execute(pool)
+        .await?;
 
     Ok(command)
 }
 
 pub async fn reannounce_all(pool: &SqlitePool, pipe_path: &str) -> anyhow::Result<usize> {
-    let active: Vec<crate::bgp::BgpAnnouncement> = sqlx::query_as(
-        "SELECT * FROM bgp_announcements WHERE withdrawn_at IS NULL ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await?;
+    let active: Vec<crate::bgp::BgpAnnouncement> =
+        sqlx::query_as("SELECT * FROM bgp_announcements WHERE withdrawn_at IS NULL ORDER BY id")
+            .fetch_all(pool)
+            .await?;
 
     let mut count = 0;
 
@@ -183,7 +182,9 @@ pub async fn reannounce_all(pool: &SqlitePool, pipe_path: &str) -> anyhow::Resul
                 .await;
         match result {
             Ok(Ok(())) => count += 1,
-            Ok(Err(e)) => tracing::warn!("BGP reannounce pipe write failed for {}: {}", ann.prefix, e),
+            Ok(Err(e)) => {
+                tracing::warn!("BGP reannounce pipe write failed for {}: {}", ann.prefix, e)
+            }
             Err(e) => tracing::warn!("spawn_blocking failed for BGP reannounce: {}", e),
         }
     }

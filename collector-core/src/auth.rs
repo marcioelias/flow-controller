@@ -81,7 +81,9 @@ pub struct AppState {
     pub metrics: std::sync::Arc<metrics::CollectorMetrics>,
     pub license: std::sync::Arc<std::sync::RwLock<crate::license::LicenseStatus>>,
     pub clickhouse_url: String,
-    pub bgp_sessions: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, crate::bgp::BgpSessionState>>>,
+    pub bgp_sessions: std::sync::Arc<
+        std::sync::RwLock<std::collections::HashMap<String, crate::bgp::BgpSessionState>>,
+    >,
     pub exabgp_pipe: String,
     pub exabgp_config_path: String,
     pub ml_status: crate::ml_runner::SharedMlStatus,
@@ -118,14 +120,12 @@ pub async fn init_db() -> anyhow::Result<SqlitePool> {
     if admin_exists.is_none() {
         // Create default admin user (admin / admin123)
         let password_hash = bcrypt::hash("admin123", bcrypt::DEFAULT_COST)?;
-        sqlx::query(
-            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
-        )
-        .bind("admin")
-        .bind(password_hash)
-        .bind(true)
-        .execute(&pool)
-        .await?;
+        sqlx::query("INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)")
+            .bind("admin")
+            .bind(password_hash)
+            .bind(true)
+            .execute(&pool)
+            .await?;
 
         tracing::info!("Default admin user created (username: admin, password: admin123)");
     }
@@ -238,22 +238,21 @@ pub async fn create_user_handler(
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, StatusCode> {
     // Hash the password
-    let password_hash = hash_password(&payload.password)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let password_hash =
+        hash_password(&payload.password).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Insert user into database
-    let result = sqlx::query(
-        "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
-    )
-    .bind(&payload.username)
-    .bind(&password_hash)
-    .bind(payload.is_admin)
-    .execute(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create user: {}", e);
-        StatusCode::CONFLICT // Username already exists
-    })?;
+    let result =
+        sqlx::query("INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)")
+            .bind(&payload.username)
+            .bind(&password_hash)
+            .bind(payload.is_admin)
+            .execute(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create user: {}", e);
+                StatusCode::CONFLICT // Username already exists
+            })?;
 
     Ok(Json(UserResponse {
         id: result.last_insert_rowid(),
@@ -270,8 +269,8 @@ pub async fn update_user_handler(
 ) -> Result<Json<UserResponse>, StatusCode> {
     if let Some(password) = payload.password {
         if !password.is_empty() {
-            let password_hash = hash_password(&password)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let password_hash =
+                hash_password(&password).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
             sqlx::query(
                 "UPDATE users SET username = ?, password_hash = ?, is_admin = ? WHERE id = ?",
@@ -317,7 +316,6 @@ pub async fn update_user_handler(
         is_admin: payload.is_admin,
     }))
 }
-
 
 /// Delete a user (admin only)
 pub async fn delete_user_handler(

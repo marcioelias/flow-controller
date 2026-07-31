@@ -7,6 +7,7 @@ mod bgp_config;
 mod bgp_control;
 mod bgp_session_monitor;
 mod detector;
+mod exporters;
 mod features;
 mod license;
 mod llm;
@@ -14,7 +15,6 @@ mod middleware;
 mod ml_api;
 mod ml_model;
 mod ml_runner;
-mod exporters;
 mod settings;
 mod stats;
 mod system_health;
@@ -52,16 +52,19 @@ async fn refresh_whitelist(pool: sqlx::SqlitePool, set: AllowedSet) {
 }
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     http::StatusCode,
     middleware as axum_middleware,
     response::IntoResponse,
     routing::{delete, get, post},
     Router,
 };
+use serde::Serialize;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
-use serde::Serialize;
 
 use aggregator::{AggregatedMetrics, AggregationKey, ThreadLocalAggregator};
 use netflow_parser::parse_packet;
@@ -77,31 +80,37 @@ pub struct LiveFlowStats {
 #[derive(Serialize, Clone, Debug)]
 pub struct DebugFlow {
     pub timestamp_sec: u32,
-    pub exporter_ip:   String,
-    pub src_ip:        String,
-    pub dst_ip:        String,
-    pub src_port:      u16,
-    pub dst_port:      u16,
-    pub protocol:      u8,
-    pub bytes:         u64,
-    pub packets:       u64,
-    pub src_asn:       u32,
-    pub dst_asn:       u32,
-    pub ingress_if:    u32,
-    pub egress_if:     u32,
-    pub tcp_flags:     u8,
-    pub flow_count:    u64,
+    pub exporter_ip: String,
+    pub src_ip: String,
+    pub dst_ip: String,
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub protocol: u8,
+    pub bytes: u64,
+    pub packets: u64,
+    pub src_asn: u32,
+    pub dst_asn: u32,
+    pub ingress_if: u32,
+    pub egress_if: u32,
+    pub tcp_flags: u8,
+    pub flow_count: u64,
 }
 
 // Prometheus metrics handler (no auth — scraped externally)
-async fn metrics_handler(
-    State(state): State<Arc<auth::AppState>>,
-) -> impl IntoResponse {
+async fn metrics_handler(State(state): State<Arc<auth::AppState>>) -> impl IntoResponse {
     let encoder = prometheus::TextEncoder::new();
     let metric_families = state.metrics.registry.gather();
     match encoder.encode_to_string(&metric_families) {
-        Ok(text) => (StatusCode::OK, [("Content-Type", prometheus::TEXT_FORMAT)], text.into_bytes()),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, [("Content-Type", "text/plain")], Vec::new()),
+        Ok(text) => (
+            StatusCode::OK,
+            [("Content-Type", prometheus::TEXT_FORMAT)],
+            text.into_bytes(),
+        ),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [("Content-Type", "text/plain")],
+            Vec::new(),
+        ),
     }
 }
 
@@ -243,13 +252,14 @@ fn try_save_license(path: &str, content: &str) -> std::io::Result<()> {
 // ---------------------------------------------------------------------------
 
 const RUSTC_VERSION: &str = env!("RUSTC_VERSION");
-const CARGO_DEPS: &str    = env!("CARGO_DEPS");
+const CARGO_DEPS: &str = env!("CARGO_DEPS");
 
 async fn version_handler(
     State(state): State<Arc<auth::AppState>>,
 ) -> axum::Json<serde_json::Value> {
     // Query ClickHouse for its runtime version (best-effort, non-blocking)
-    let ch_version = fetch_clickhouse_version(&state.clickhouse_url).await
+    let ch_version = fetch_clickhouse_version(&state.clickhouse_url)
+        .await
         .unwrap_or_else(|| "unavailable".to_string());
 
     // Parse CARGO_DEPS="Label=ver,Label=ver,..." into array of objects
@@ -318,7 +328,9 @@ fn unix_now_secs() -> u32 {
 }
 
 fn init_tracing() {
-    let json = std::env::var("LOG_FORMAT").map(|v| v == "json").unwrap_or(false);
+    let json = std::env::var("LOG_FORMAT")
+        .map(|v| v == "json")
+        .unwrap_or(false);
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
     if json {
@@ -341,9 +353,12 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("Starting High-Performance Flow Collector");
 
     // Start Tokio runtime for the ClickHouse Exporter
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
     let exporter_client = Arc::new(ClickhouseExporter::new(&clickhouse_url));
     rt.block_on(exporter_client.setup_tables())?;
     tracing::info!("Clickhouse tables validated successfully!");
@@ -372,8 +387,8 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("Alert tables initialized successfully!");
 
     // Read ExaBGP env vars
-    let exabgp_pipe = std::env::var("EXABGP_PIPE_PATH")
-        .unwrap_or_else(|_| "/run/exabgp/exabgp.in".to_string());
+    let exabgp_pipe =
+        std::env::var("EXABGP_PIPE_PATH").unwrap_or_else(|_| "/run/exabgp/exabgp.in".to_string());
     let exabgp_config_path = std::env::var("EXABGP_CONFIG_PATH")
         .unwrap_or_else(|_| "/run/exabgp-config/exabgp.conf".to_string());
 
@@ -416,7 +431,8 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("Settings table initialized successfully!");
 
     // Read COLLECTOR_WORKERS from settings (clamp to 1–64)
-    let worker_count: usize = rt.block_on(settings::get_value(&auth_db, "COLLECTOR_WORKERS"))
+    let worker_count: usize = rt
+        .block_on(settings::get_value(&auth_db, "COLLECTOR_WORKERS"))
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(4)
         .clamp(1, 64);
@@ -465,12 +481,8 @@ fn main() -> anyhow::Result<()> {
         let monitor_pipe = std::env::var("EXABGP_OUT_PIPE_PATH")
             .unwrap_or_else(|_| "/run/exabgp/exabgp.out".to_string());
         rt.spawn(async move {
-            bgp_session_monitor::bgp_session_monitor(
-                monitor_pool,
-                monitor_sessions,
-                monitor_pipe,
-            )
-            .await;
+            bgp_session_monitor::bgp_session_monitor(monitor_pool, monitor_sessions, monitor_pipe)
+                .await;
         });
     }
 
@@ -493,7 +505,7 @@ fn main() -> anyhow::Result<()> {
     // Spawn ML anomaly detector
     let (ml_tx, ml_rx) = flume::bounded::<Vec<flow_types::FlowFeatures>>(100);
     {
-        let ml_state  = app_state.clone();
+        let ml_state = app_state.clone();
         let ml_status = ml_shared_status.clone();
         rt.spawn(async move {
             ml_runner::run_ml(ml_state, ml_rx, ml_status).await;
@@ -505,7 +517,11 @@ fn main() -> anyhow::Result<()> {
         let llm_pool = auth_db.clone();
         rt.spawn(async move {
             if let Some(llm_client) = llm::LlmClient::from_settings(&llm_pool).await {
-                tracing::info!("LLM explainer: using model '{}' at {}", llm_client.model_name(), "configured endpoint");
+                tracing::info!(
+                    "LLM explainer: using model '{}' at {}",
+                    llm_client.model_name(),
+                    "configured endpoint"
+                );
                 llm::run_llm_explainer(llm_pool, llm_client).await;
             }
         });
@@ -546,14 +562,26 @@ fn main() -> anyhow::Result<()> {
         let protected_routes = Router::new()
             .route("/api/users", get(auth::list_users_handler))
             .route("/api/users", post(auth::create_user_handler))
-            .route("/api/users/:id", axum::routing::put(auth::update_user_handler))
+            .route(
+                "/api/users/:id",
+                axum::routing::put(auth::update_user_handler),
+            )
             .route("/api/users/:id", delete(auth::delete_user_handler))
             .route("/api/exporters", get(exporters::list_exporters_handler))
             .route("/api/exporters", post(exporters::create_exporter_handler))
             .route("/api/exporters/:id", get(exporters::get_exporter_handler))
-            .route("/api/exporters/:id", axum::routing::put(exporters::update_exporter_handler))
-            .route("/api/exporters/:id", delete(exporters::delete_exporter_handler))
-            .route("/api/settings/:key", axum::routing::put(settings::update_setting_handler))
+            .route(
+                "/api/exporters/:id",
+                axum::routing::put(exporters::update_exporter_handler),
+            )
+            .route(
+                "/api/exporters/:id",
+                delete(exporters::delete_exporter_handler),
+            )
+            .route(
+                "/api/settings/:key",
+                axum::routing::put(settings::update_setting_handler),
+            )
             .route("/api/backup/config", get(backup::backup_config_handler))
             .route("/api/backup/flows/size", get(backup::flows_size_handler))
             .route("/api/backup/flows", get(backup::backup_flows_handler))
@@ -561,48 +589,93 @@ fn main() -> anyhow::Result<()> {
             // BGP Peers
             .route("/api/bgp/peers", get(bgp::list_peers_handler))
             .route("/api/bgp/peers", post(bgp::create_peer_handler))
-            .route("/api/bgp/peers/:id", axum::routing::put(bgp::update_peer_handler))
+            .route(
+                "/api/bgp/peers/:id",
+                axum::routing::put(bgp::update_peer_handler),
+            )
             .route("/api/bgp/peers/:id", delete(bgp::delete_peer_handler))
             // BGP Communities
             .route("/api/bgp/communities", get(bgp::list_communities_handler))
             .route("/api/bgp/communities", post(bgp::create_community_handler))
-            .route("/api/bgp/communities/:id", axum::routing::put(bgp::update_community_handler))
-            .route("/api/bgp/communities/:id", delete(bgp::delete_community_handler))
+            .route(
+                "/api/bgp/communities/:id",
+                axum::routing::put(bgp::update_community_handler),
+            )
+            .route(
+                "/api/bgp/communities/:id",
+                delete(bgp::delete_community_handler),
+            )
             // BGP Prefixes
             .route("/api/bgp/prefixes", get(bgp::list_prefixes_handler))
             .route("/api/bgp/prefixes", post(bgp::create_prefix_handler))
-            .route("/api/bgp/prefixes/:id", axum::routing::put(bgp::update_prefix_handler))
+            .route(
+                "/api/bgp/prefixes/:id",
+                axum::routing::put(bgp::update_prefix_handler),
+            )
             .route("/api/bgp/prefixes/:id", delete(bgp::delete_prefix_handler))
             // BGP Announcements
-            .route("/api/bgp/announcements", get(bgp::list_announcements_handler))
+            .route(
+                "/api/bgp/announcements",
+                get(bgp::list_announcements_handler),
+            )
             .route("/api/bgp/announcements", post(bgp::announce_route_handler))
-            .route("/api/bgp/announcements/:id", delete(bgp::withdraw_route_handler))
+            .route(
+                "/api/bgp/announcements/:id",
+                delete(bgp::withdraw_route_handler),
+            )
             // BGP Apply & Sessions
             .route("/api/bgp/apply", post(bgp::apply_config_handler))
             .route("/api/bgp/sessions", get(bgp::get_sessions_handler))
             // Alert rules
-            .route("/api/alerts/rules", get(alert_api::list_rules).post(alert_api::create_rule))
-            .route("/api/alerts/rules/:id", axum::routing::put(alert_api::update_rule).delete(alert_api::delete_rule))
-            .route("/api/alerts/rules/:id/toggle", axum::routing::patch(alert_api::toggle_rule))
-            .route("/api/alerts/events", get(alert_api::list_events).delete(alert_api::clear_events))
-            .route("/api/alerts/telegram", get(alert_api::get_telegram).put(alert_api::update_telegram))
+            .route(
+                "/api/alerts/rules",
+                get(alert_api::list_rules).post(alert_api::create_rule),
+            )
+            .route(
+                "/api/alerts/rules/:id",
+                axum::routing::put(alert_api::update_rule).delete(alert_api::delete_rule),
+            )
+            .route(
+                "/api/alerts/rules/:id/toggle",
+                axum::routing::patch(alert_api::toggle_rule),
+            )
+            .route(
+                "/api/alerts/events",
+                get(alert_api::list_events).delete(alert_api::clear_events),
+            )
+            .route(
+                "/api/alerts/telegram",
+                get(alert_api::get_telegram).put(alert_api::update_telegram),
+            )
             .route("/api/alerts/telegram/test", post(alert_api::test_telegram))
             .layer(axum_middleware::from_fn(middleware::require_admin));
 
         // Semi-protected routes (require auth but not admin)
         let user_routes = Router::new()
             .route("/api/settings", get(settings::list_settings_handler))
-            .route("/api/exporters/enabled", get(exporters::list_enabled_exporters_handler))
-            .route("/api/stats/protocols", get(stats::get_protocol_stats_handler))
-            .route("/api/stats/top-talkers", get(stats::get_top_talkers_handler))
+            .route(
+                "/api/exporters/enabled",
+                get(exporters::list_enabled_exporters_handler),
+            )
+            .route(
+                "/api/stats/protocols",
+                get(stats::get_protocol_stats_handler),
+            )
+            .route(
+                "/api/stats/top-talkers",
+                get(stats::get_top_talkers_handler),
+            )
             .route("/api/stats/asn", get(stats::get_asn_stats_handler))
             .route("/api/stats/ports", get(stats::get_port_breakdown_handler))
             .route("/api/stats/timeline", get(stats::get_timeline_handler))
-            .route("/api/stats/exporters", get(stats::get_exporter_summary_handler))
+            .route(
+                "/api/stats/exporters",
+                get(stats::get_exporter_summary_handler),
+            )
             .route("/api/system/health", get(system_health::get_health_handler))
             // ML / AI routes
             .route("/api/ml/status", get(ml_api::get_ml_status))
-            .route("/api/ml/stats",  get(ml_api::get_ml_stats))
+            .route("/api/ml/stats", get(ml_api::get_ml_stats))
             .route("/api/ml/events", get(ml_api::get_ml_events))
             .layer(axum_middleware::from_fn(middleware::require_auth));
 
@@ -641,13 +714,16 @@ fn main() -> anyhow::Result<()> {
             }
 
             let mut batch_total_bytes = 0;
-            let mut per_device_bytes: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+            let mut per_device_bytes: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
 
             for (key, metrics) in map {
                 batch_total_bytes += metrics.bytes;
 
                 // Aggregate bytes per exporter_ip
-                *per_device_bytes.entry(key.exporter_ip.to_string()).or_insert(0) += metrics.bytes;
+                *per_device_bytes
+                    .entry(key.exporter_ip.to_string())
+                    .or_insert(0) += metrics.bytes;
 
                 match (key.src_ip, key.dst_ip) {
                     (flow_types::IpAddrType::V4(src_ip), flow_types::IpAddrType::V4(dst_ip)) => {
@@ -689,7 +765,11 @@ fn main() -> anyhow::Result<()> {
             if let Err(e) = exporter_clone.insert_batch(&v4_batch, &v6_batch).await {
                 tracing::error!("Failed to insert batch to ClickHouse: {}", e);
             } else {
-                tracing::debug!("Inserted batches (v4: {}, v6: {}) to ClickHouse.", v4_batch.len(), v6_batch.len());
+                tracing::debug!(
+                    "Inserted batches (v4: {}, v6: {}) to ClickHouse.",
+                    v4_batch.len(),
+                    v6_batch.len()
+                );
             }
 
             // Broadcast to connected websockets via ignoring send errors (e.g. no clients)
@@ -722,16 +802,19 @@ fn main() -> anyhow::Result<()> {
 
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_reuse_address(true)?;
-    
-    if let Err(e) = socket.set_recv_buffer_size(32 * 1024 * 1024) { 
+
+    if let Err(e) = socket.set_recv_buffer_size(32 * 1024 * 1024) {
         tracing::warn!("Could not set optimal UDP recv buffer size: {}", e);
     }
-    
+
     let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 2055);
     socket.bind(&addr.into())?;
     let udp_socket: UdpSocket = socket.into();
-    
-    tracing::info!("Listening for NetFlow/IPFIX on UDP port 2055 with {} workers", worker_count);
+
+    tracing::info!(
+        "Listening for NetFlow/IPFIX on UDP port 2055 with {} workers",
+        worker_count
+    );
 
     let dropped_packets = Arc::new(AtomicUsize::new(0));
     let blocked_packets = Arc::new(AtomicUsize::new(0));
@@ -748,8 +831,12 @@ fn main() -> anyhow::Result<()> {
 
                 if !is_allowed {
                     let count = blocked_packets.fetch_add(1, Ordering::Relaxed);
-                    if count % 1000 == 0 {
-                        tracing::warn!("Blocked {} packets from unauthorized exporter: {}", count + 1, src_addr.ip());
+                    if count.is_multiple_of(1000) {
+                        tracing::warn!(
+                            "Blocked {} packets from unauthorized exporter: {}",
+                            count + 1,
+                            src_addr.ip()
+                        );
                     }
                     continue;
                 }
@@ -770,7 +857,9 @@ fn main() -> anyhow::Result<()> {
 
                 collector_metrics.flows_received.inc();
 
-                if let Err(flume::TrySendError::Full(_)) = worker_senders[worker_idx].try_send(payload) {
+                if let Err(flume::TrySendError::Full(_)) =
+                    worker_senders[worker_idx].try_send(payload)
+                {
                     dropped_packets.fetch_add(1, Ordering::Relaxed);
                     collector_metrics.packets_dropped.inc();
                 }
@@ -805,7 +894,9 @@ fn worker_loop(
         if let Some(payload) = received {
             match parse_packet(&payload.data, &mut templates, payload.exporter_ip) {
                 Ok(parsed_flows) => {
-                    worker_metrics.flows_decoded.inc_by(parsed_flows.len() as u64);
+                    worker_metrics
+                        .flows_decoded
+                        .inc_by(parsed_flows.len() as u64);
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -824,20 +915,20 @@ fn worker_loop(
                             };
                             let _ = debug_tx.send(DebugFlow {
                                 timestamp_sec: now,
-                                exporter_ip:   payload.exporter_ip.to_string(),
-                                src_ip:        src_ip_str,
-                                dst_ip:        dst_ip_str,
-                                src_port:      flow.src_port,
-                                dst_port:      flow.dst_port,
-                                protocol:      flow.protocol,
-                                bytes:         flow.bytes,
-                                packets:       flow.packets,
-                                src_asn:       flow.src_asn,
-                                dst_asn:       flow.dst_asn,
-                                ingress_if:    flow.ingress_interface,
-                                egress_if:     flow.egress_interface,
-                                tcp_flags:     flow.tcp_flags,
-                                flow_count:    1,
+                                exporter_ip: payload.exporter_ip.to_string(),
+                                src_ip: src_ip_str,
+                                dst_ip: dst_ip_str,
+                                src_port: flow.src_port,
+                                dst_port: flow.dst_port,
+                                protocol: flow.protocol,
+                                bytes: flow.bytes,
+                                packets: flow.packets,
+                                src_asn: flow.src_asn,
+                                dst_asn: flow.dst_asn,
+                                ingress_if: flow.ingress_interface,
+                                egress_if: flow.egress_interface,
+                                tcp_flags: flow.tcp_flags,
+                                flow_count: 1,
                             });
                         }
                         aggregator.aggregate(&flow);
@@ -850,7 +941,9 @@ fn worker_loop(
         }
 
         if last_flush.elapsed() >= Duration::from_secs(FLUSH_INTERVAL_SECS) {
-            worker_metrics.template_cache_size.set(templates.len() as i64);
+            worker_metrics
+                .template_cache_size
+                .set(templates.len() as i64);
             let map = aggregator.flush_window();
             if !map.is_empty() {
                 let _ = export_tx.try_send(FlowWindow {

@@ -60,9 +60,7 @@ async fn try_monitor(
             }
         };
 
-        let now = chrono::Utc::now()
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         match state_str {
             "up" | "connected" => {

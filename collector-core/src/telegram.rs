@@ -78,7 +78,11 @@ async fn fetch_unnotified(
     };
 
     // Build dynamic IN clause
-    let placeholders: String = severities.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders: String = severities
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
     let query_str = format!(
         "SELECT id, rule_id, exporter_ip, src_ip, alert_type, severity, message,
                 upload_bytes, download_bytes, pps, avg_pkt_bytes, attack_ports,
@@ -107,7 +111,11 @@ async fn fetch_unnotified(
                 alert_type: r.try_get("alert_type")?,
                 severity: {
                     let s: &str = r.try_get("severity")?;
-                    if s == "critical" { AlertSeverity::Critical } else { AlertSeverity::Warning }
+                    if s == "critical" {
+                        AlertSeverity::Critical
+                    } else {
+                        AlertSeverity::Warning
+                    }
                 },
                 message: r.try_get("message")?,
                 upload_bytes: r.try_get("upload_bytes")?,
@@ -138,21 +146,14 @@ async fn mark_notified(pool: &sqlx::SqlitePool, event_id: i64) -> anyhow::Result
 }
 
 pub async fn send_message(cfg: &TelegramConfig, text: &str) -> anyhow::Result<()> {
-    let url = format!(
-        "https://api.telegram.org/bot{}/sendMessage",
-        cfg.bot_token
-    );
+    let url = format!("https://api.telegram.org/bot{}/sendMessage", cfg.bot_token);
     let body = serde_json::json!({
         "chat_id": cfg.chat_id,
         "text": text,
         "parse_mode": "HTML"
     });
 
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .json(&body)
-        .send()
-        .await?;
+    let resp = reqwest::Client::new().post(&url).json(&body).send().await?;
 
     if resp.status().is_success() {
         Ok(())

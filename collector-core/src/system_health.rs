@@ -65,7 +65,13 @@ fn format_uptime(secs: u64) -> String {
     let hours = (secs % 86400) / 3600;
     let mins = (secs % 3600) / 60;
     if days > 0 {
-        format!("{} dia{}, {}h {}m", days, if days == 1 { "" } else { "s" }, hours, mins)
+        format!(
+            "{} dia{}, {}h {}m",
+            days,
+            if days == 1 { "" } else { "s" },
+            hours,
+            mins
+        )
     } else {
         format!("{}h {}m", hours, mins)
     }
@@ -75,9 +81,11 @@ fn read_diskstats_iops(device: &str) -> Option<(u64, u64)> {
     let content = std::fs::read_to_string("/proc/diskstats").ok()?;
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 14 { continue; }
+        if parts.len() < 14 {
+            continue;
+        }
         if parts[2] == device {
-            let reads:  u64 = parts[3].parse().unwrap_or(0);
+            let reads: u64 = parts[3].parse().unwrap_or(0);
             let writes: u64 = parts[7].parse().unwrap_or(0);
             return Some((reads, writes));
         }
@@ -107,7 +115,11 @@ fn strip_partition_suffix(dev: &str) -> &str {
     }
     // sda1 → sda
     let trimmed = dev.trim_end_matches(|c: char| c.is_ascii_digit());
-    if trimmed.len() < dev.len() { trimmed } else { dev }
+    if trimmed.len() < dev.len() {
+        trimmed
+    } else {
+        dev
+    }
 }
 
 pub async fn get_health_handler(
@@ -121,22 +133,40 @@ pub async fn get_health_handler(
 
     // CPU
     let cpu_usages: Vec<f64> = sys.cpus().iter().map(|c| c.cpu_usage() as f64).collect();
-    let cpu_total = if cpu_usages.is_empty() { 0.0 }
-        else { cpu_usages.iter().sum::<f64>() / cpu_usages.len() as f64 };
+    let cpu_total = if cpu_usages.is_empty() {
+        0.0
+    } else {
+        cpu_usages.iter().sum::<f64>() / cpu_usages.len() as f64
+    };
 
     // Memory
     let total_mem = sys.total_memory();
-    let used_mem  = sys.used_memory();
+    let used_mem = sys.used_memory();
     let avail_mem = sys.available_memory();
-    let mem_pct   = if total_mem > 0 { (used_mem as f64 / total_mem as f64) * 100.0 } else { 0.0 };
+    let mem_pct = if total_mem > 0 {
+        (used_mem as f64 / total_mem as f64) * 100.0
+    } else {
+        0.0
+    };
 
     // Disk — use sysinfo for capacity, /proc/diskstats for IOPS
     let disks = Disks::new_with_refreshed_list();
-    let (disk_total, disk_used, disk_avail) = disks.iter()
+    let (disk_total, disk_used, disk_avail) = disks
+        .iter()
         .find(|d| d.mount_point() == std::path::Path::new("/"))
-        .map(|d| (d.total_space(), d.total_space() - d.available_space(), d.available_space()))
+        .map(|d| {
+            (
+                d.total_space(),
+                d.total_space() - d.available_space(),
+                d.available_space(),
+            )
+        })
         .unwrap_or((0, 0, 0));
-    let disk_pct = if disk_total > 0 { (disk_used as f64 / disk_total as f64) * 100.0 } else { 0.0 };
+    let disk_pct = if disk_total > 0 {
+        (disk_used as f64 / disk_total as f64) * 100.0
+    } else {
+        0.0
+    };
 
     let (reads_ps, writes_ps) = if let Some(dev) = root_device_name() {
         let s0 = read_diskstats_iops(&dev);
@@ -161,40 +191,46 @@ pub async fn get_health_handler(
     let (rss_bytes, proc_cpu, threads, proc_uptime) = match pid {
         Some(p) => {
             let proc = sys.process(p);
-            let rss   = proc.map(|pr| pr.memory()).unwrap_or(0);
-            let cpu   = proc.map(|pr| pr.cpu_usage() as f64 / sys.cpus().len().max(1) as f64).unwrap_or(0.0);
-            let thr   = proc.map(|_| {
-                // sysinfo doesn't expose thread count directly; read from /proc
-                std::fs::read_to_string("/proc/self/status")
-                    .ok()
-                    .and_then(|s| s.lines()
-                        .find(|l| l.starts_with("Threads:"))
-                        .and_then(|l| l.split_whitespace().nth(1))
-                        .and_then(|n| n.parse::<u32>().ok()))
-                    .unwrap_or(0)
-            }).unwrap_or(0);
-            let start = proc.map(|pr| pr.start_time()).unwrap_or(0);
-            let pup   = uptime_secs.saturating_sub(
-                if start > 0 {
-                    // start_time is UNIX epoch; uptime is relative
-                    // compute process uptime from system boot
-                    let boot_ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
+            let rss = proc.map(|pr| pr.memory()).unwrap_or(0);
+            let cpu = proc
+                .map(|pr| pr.cpu_usage() as f64 / sys.cpus().len().max(1) as f64)
+                .unwrap_or(0.0);
+            let thr = proc
+                .map(|_| {
+                    // sysinfo doesn't expose thread count directly; read from /proc
+                    std::fs::read_to_string("/proc/self/status")
+                        .ok()
+                        .and_then(|s| {
+                            s.lines()
+                                .find(|l| l.starts_with("Threads:"))
+                                .and_then(|l| l.split_whitespace().nth(1))
+                                .and_then(|n| n.parse::<u32>().ok())
+                        })
                         .unwrap_or(0)
-                        .saturating_sub(uptime_secs);
-                    start.saturating_sub(boot_ts)
-                } else { uptime_secs }
-            );
+                })
+                .unwrap_or(0);
+            let start = proc.map(|pr| pr.start_time()).unwrap_or(0);
+            let pup = uptime_secs.saturating_sub(if start > 0 {
+                // start_time is UNIX epoch; uptime is relative
+                // compute process uptime from system boot
+                let boot_ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+                    .saturating_sub(uptime_secs);
+                start.saturating_sub(boot_ts)
+            } else {
+                uptime_secs
+            });
             (rss, cpu, thr, pup)
         }
         None => (0, 0.0, 0, 0),
     };
 
     // Collector metrics
-    let flows_received  = state.metrics.flows_received.get() as u64;
-    let flows_decoded   = state.metrics.flows_decoded.get() as u64;
-    let packets_dropped = state.metrics.packets_dropped.get() as u64;
+    let flows_received = state.metrics.flows_received.get();
+    let flows_decoded = state.metrics.flows_decoded.get();
+    let packets_dropped = state.metrics.packets_dropped.get();
     let tmpl_cache_size = state.metrics.template_cache_size.get();
 
     // Suppress unused variable from sysinfo refresh

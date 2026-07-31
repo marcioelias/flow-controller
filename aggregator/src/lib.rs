@@ -29,6 +29,12 @@ pub struct ThreadLocalAggregator {
     map: HashMap<AggregationKey, AggregatedMetrics, RandomState>,
 }
 
+impl Default for ThreadLocalAggregator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThreadLocalAggregator {
     pub fn new() -> Self {
         Self {
@@ -51,7 +57,7 @@ impl ThreadLocalAggregator {
             dst_asn: flow.dst_asn,
         };
 
-        let metrics = self.map.entry(key).or_insert_with(AggregatedMetrics::default);
+        let metrics = self.map.entry(key).or_default();
         metrics.packets += flow.packets;
         metrics.bytes += flow.bytes;
         metrics.flow_count += 1;
@@ -59,7 +65,8 @@ impl ThreadLocalAggregator {
 
     /// Retries the current map, swapping it with a an empty pre-allocated one
     pub fn flush_window(&mut self) -> HashMap<AggregationKey, AggregatedMetrics, RandomState> {
-        let mut new_map = HashMap::with_capacity_and_hasher(self.map.capacity(), RandomState::new());
+        let mut new_map =
+            HashMap::with_capacity_and_hasher(self.map.capacity(), RandomState::new());
         std::mem::swap(&mut self.map, &mut new_map);
         new_map
     }

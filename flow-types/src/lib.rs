@@ -4,27 +4,27 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// Used as input to the ML anomaly detector (Isolation Forest).
 #[derive(Debug, Clone)]
 pub struct FlowFeatures {
-    pub exporter_ip:      String,
-    pub src_ip:           String,
-    pub window_ts:        u32,
+    pub exporter_ip: String,
+    pub src_ip: String,
+    pub window_ts: u32,
 
-    pub bytes_total:      u64,
-    pub packets_total:    u64,
-    pub flows_total:      u64,
-    pub avg_pkt_bytes:    f64,
+    pub bytes_total: u64,
+    pub packets_total: u64,
+    pub flows_total: u64,
+    pub avg_pkt_bytes: f64,
 
-    pub pps:              f64,
-    pub bps:              f64,
+    pub pps: f64,
+    pub bps: f64,
 
-    pub unique_dst_ips:   u32,
+    pub unique_dst_ips: u32,
     pub unique_dst_ports: u32,
 
-    pub upload_bytes:     u64,
-    pub download_bytes:   u64,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
 
-    pub tcp_ratio:        f64,
-    pub udp_ratio:        f64,
-    pub icmp_ratio:       f64,
+    pub tcp_ratio: f64,
+    pub udp_ratio: f64,
+    pub icmp_ratio: f64,
 }
 
 impl FlowFeatures {
@@ -66,7 +66,7 @@ pub struct NormalizedFlow {
     /// Unix timestamp in seconds for the start or arrival of the flow window.
     pub timestamp: u64,
     /// Exporter IP addressing the entity sending this telemetry
-    pub exporter_ip: Ipv4Addr, 
+    pub exporter_ip: Ipv4Addr,
     /// Source IP Address
     pub src_ip: IpAddrType,
     /// Destination IP Address

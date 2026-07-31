@@ -1,8 +1,8 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use flow_types::NormalizedFlow;
-use thiserror::Error;
 use std::io::Cursor;
 use template_cache::ThreadLocalTemplateCache;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ParseError {
@@ -285,12 +285,25 @@ fn parse_v9_message(
         match flowset_id {
             0 => {
                 // Template FlowSet
-                parse_template_set(set_data, hdr.source_id, hdr.unix_secs, ipv4_exporter, templates, false);
+                parse_template_set(
+                    set_data,
+                    hdr.source_id,
+                    hdr.unix_secs,
+                    ipv4_exporter,
+                    templates,
+                    false,
+                );
             }
             1 => { /* Options Template — skip */ }
             id if id > 255 => {
-                let mut data_flows =
-                    parse_data_set(set_data, id, hdr.source_id, hdr.unix_secs, ipv4_exporter, templates);
+                let mut data_flows = parse_data_set(
+                    set_data,
+                    id,
+                    hdr.source_id,
+                    hdr.unix_secs,
+                    ipv4_exporter,
+                    templates,
+                );
                 flows.append(&mut data_flows);
             }
             _ => {}
@@ -471,8 +484,8 @@ mod tests {
         pkt.extend_from_slice(&10u16.to_be_bytes());
         pkt.extend_from_slice(&(total_len as u16).to_be_bytes());
         pkt.extend_from_slice(&1700000000u32.to_be_bytes()); // export_time
-        pkt.extend_from_slice(&1u32.to_be_bytes());          // seq_num
-        pkt.extend_from_slice(&100u32.to_be_bytes());         // observation_domain_id
+        pkt.extend_from_slice(&1u32.to_be_bytes()); // seq_num
+        pkt.extend_from_slice(&100u32.to_be_bytes()); // observation_domain_id
 
         // Template Set (set_id=2)
         pkt.extend_from_slice(&2u16.to_be_bytes());
@@ -511,7 +524,9 @@ mod tests {
         assert_eq!(f.packets, 32);
         assert_eq!(f.protocol, 6);
         assert_eq!(f.dst_port, 443);
-        assert!(matches!(f.src_ip, flow_types::IpAddrType::V4(ip) if ip == std::net::Ipv4Addr::new(192, 168, 1, 10)));
+        assert!(
+            matches!(f.src_ip, flow_types::IpAddrType::V4(ip) if ip == std::net::Ipv4Addr::new(192, 168, 1, 10))
+        );
     }
 
     #[test]
@@ -527,7 +542,9 @@ mod tests {
         assert_eq!(f.packets, 64);
         assert_eq!(f.protocol, 6);
         assert_eq!(f.dst_port, 443);
-        assert!(matches!(f.src_ip, flow_types::IpAddrType::V4(ip) if ip == std::net::Ipv4Addr::new(10, 0, 1, 5)));
+        assert!(
+            matches!(f.src_ip, flow_types::IpAddrType::V4(ip) if ip == std::net::Ipv4Addr::new(10, 0, 1, 5))
+        );
     }
 
     #[test]
@@ -559,11 +576,11 @@ mod tests {
         pkt.extend_from_slice(&(tmpl_set_len as u16).to_be_bytes());
         pkt.extend_from_slice(&template_id.to_be_bytes());
         pkt.extend_from_slice(&2u16.to_be_bytes()); // field_count = 2
-        // Enterprise field (should be skipped)
+                                                    // Enterprise field (should be skipped)
         pkt.extend_from_slice(&0x8001u16.to_be_bytes()); // enterprise bit set
-        pkt.extend_from_slice(&4u16.to_be_bytes());      // length
-        pkt.extend_from_slice(&12345u32.to_be_bytes());  // enterprise number
-        // Real field
+        pkt.extend_from_slice(&4u16.to_be_bytes()); // length
+        pkt.extend_from_slice(&12345u32.to_be_bytes()); // enterprise number
+                                                        // Real field
         pkt.extend_from_slice(&IANA_IN_BYTES.to_be_bytes());
         pkt.extend_from_slice(&8u16.to_be_bytes());
 

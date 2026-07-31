@@ -1,13 +1,13 @@
-/// Software licensing module for the Flow Collector.
-///
-/// The Ed25519 public key is embedded at compile time as `PUBLIC_KEY_B64`.
-/// After running `license-gen keygen`, copy the printed "raw base64url no-pad" value here.
-///
-/// License file is looked up in this order:
-///   1. /etc/flow-collector/license.key
-///   2. ./license.key
-///
-/// If no license file is found the collector runs in the free tier (100 Mbps / 1 talker).
+//! Software licensing module for the Flow Collector.
+//!
+//! The Ed25519 public key is embedded at compile time as `PUBLIC_KEY_B64`.
+//! After running `license-gen keygen`, copy the printed "raw base64url no-pad" value here.
+//!
+//! License file is looked up in this order:
+//!   1. /etc/flow-collector/license.key
+//!   2. ./license.key
+//!
+//! If no license file is found the collector runs in the free tier (100 Mbps / 1 talker).
 
 // ---------------------------------------------------------------------------
 // Embedded public key — replace with output of `license-gen keygen`
@@ -156,9 +156,7 @@ pub fn validate_license_string(license_str: &str) -> LicenseStatus {
 
     let pubkey_arr: [u8; 32] = match pubkey_bytes.try_into() {
         Ok(arr) => arr,
-        Err(_) => {
-            return invalid_status("embedded public key is not 32 bytes".to_string(), fp)
-        }
+        Err(_) => return invalid_status("embedded public key is not 32 bytes".to_string(), fp),
     };
 
     let verifying_key = match ed25519_dalek::VerifyingKey::from_bytes(&pubkey_arr) {
@@ -221,10 +219,7 @@ pub fn validate_license_string(license_str: &str) -> LicenseStatus {
             Ok(expiry_date) => {
                 let today = chrono::Utc::now().date_naive();
                 if today > expiry_date {
-                    return invalid_status(
-                        format!("license expired on {}", exp),
-                        fp,
-                    );
+                    return invalid_status(format!("license expired on {}", exp), fp);
                 }
             }
             Err(e) => {
@@ -298,11 +293,11 @@ fn humanize_bps(bps: u64) -> String {
     const MBPS: u64 = 1_000_000;
     const KBPS: u64 = 1_000;
 
-    if bps >= GBPS && bps % GBPS == 0 {
+    if bps >= GBPS && bps.is_multiple_of(GBPS) {
         format!("{} Gbps", bps / GBPS)
     } else if bps >= GBPS {
         format!("{:.2} Gbps", bps as f64 / GBPS as f64)
-    } else if bps >= MBPS && bps % MBPS == 0 {
+    } else if bps >= MBPS && bps.is_multiple_of(MBPS) {
         format!("{} Mbps", bps / MBPS)
     } else if bps >= MBPS {
         format!("{:.2} Mbps", bps as f64 / MBPS as f64)

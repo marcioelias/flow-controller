@@ -4,12 +4,12 @@ use sqlx::SqlitePool;
 pub const DEFAULT_ATTACK_PORTS: &[u16] = &[
     123, 1900, 11211, 5353, 19, 17, // amplification sources
     80, 443, 8080, // HTTP/S flood targets
-    53,            // DNS flood
-    22,            // SSH brute force
-    25, 465, 587,  // SMTP
-    3389,          // RDP
-    6379,          // Redis
-    27017,         // MongoDB
+    53,   // DNS flood
+    22,   // SSH brute force
+    25, 465, 587,   // SMTP
+    3389,  // RDP
+    6379,  // Redis
+    27017, // MongoDB
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -29,9 +29,7 @@ impl std::fmt::Display for AlertSeverity {
 }
 
 impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for AlertSeverity {
-    fn decode(
-        value: sqlx::sqlite::SqliteValueRef<'r>,
-    ) -> Result<Self, sqlx::error::BoxDynError> {
+    fn decode(value: sqlx::sqlite::SqliteValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         let s = <&str as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
         match s {
             "critical" => Ok(AlertSeverity::Critical),
@@ -157,17 +155,14 @@ pub async fn init_tables(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?;
 
     // Idempotent migrations
-    let _ = sqlx::query(
-        "ALTER TABLE alert_events ADD COLUMN bgp_announced BOOLEAN NOT NULL DEFAULT 0",
-    )
-    .execute(pool)
-    .await;
+    let _ =
+        sqlx::query("ALTER TABLE alert_events ADD COLUMN bgp_announced BOOLEAN NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await;
 
-    let _ = sqlx::query(
-        "ALTER TABLE alert_events ADD COLUMN explanation TEXT",
-    )
-    .execute(pool)
-    .await;
+    let _ = sqlx::query("ALTER TABLE alert_events ADD COLUMN explanation TEXT")
+        .execute(pool)
+        .await;
 
     // Prune old events at startup
     sqlx::query("DELETE FROM alert_events WHERE created_at < datetime('now', '-7 days')")
@@ -247,7 +242,8 @@ pub async fn load_enabled_rules(pool: &SqlitePool) -> anyhow::Result<Vec<AlertRu
                 enabled: r.try_get::<i64, _>("enabled")? != 0,
                 params: {
                     let s: String = r.try_get("params")?;
-                    serde_json::from_str(&s).unwrap_or(serde_json::Value::Object(Default::default()))
+                    serde_json::from_str(&s)
+                        .unwrap_or(serde_json::Value::Object(Default::default()))
                 },
                 created_at: r.try_get("created_at")?,
             })

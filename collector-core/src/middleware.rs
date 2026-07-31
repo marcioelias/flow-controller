@@ -12,13 +12,7 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get("Authorization")
         .and_then(|value| value.to_str().ok())
-        .and_then(|auth| {
-            if auth.starts_with("Bearer ") {
-                Some(auth[7..].to_string())
-            } else {
-                None
-            }
-        })
+        .and_then(|auth| auth.strip_prefix("Bearer ").map(|t| t.to_string()))
 }
 
 /// Middleware to require authentication

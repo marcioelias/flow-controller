@@ -13,8 +13,7 @@ fn main() {
     let version = if let Some(tag) = git_tag {
         tag
     } else {
-        let base = std::fs::read_to_string("../VERSION")
-            .unwrap_or_else(|_| "0.0".to_string());
+        let base = std::fs::read_to_string("../VERSION").unwrap_or_else(|_| "0.0".to_string());
         let base = base.trim().to_string();
 
         // Build number = total commit count on current branch.
@@ -62,38 +61,40 @@ fn parse_cargo_lock_deps(path: &str) -> String {
 
     // Deps we care about, in display order
     let want: &[(&str, &str)] = &[
-        ("axum",                "Axum"),
-        ("tokio",               "Tokio"),
-        ("serde",               "Serde"),
-        ("serde_json",          "serde_json"),
-        ("sqlx",                "SQLx"),
-        ("reqwest",             "reqwest"),
-        ("tracing",             "tracing"),
-        ("tracing-subscriber",  "tracing-subscriber"),
-        ("tower-http",          "tower-http"),
-        ("anyhow",              "anyhow"),
-        ("dashmap",             "DashMap"),
-        ("flume",               "flume"),
-        ("ed25519-dalek",       "ed25519-dalek"),
-        ("ring",                "ring"),
-        ("jsonwebtoken",        "jsonwebtoken"),
-        ("bcrypt",              "bcrypt"),
-        ("prometheus",          "prometheus"),
-        ("clickhouse",          "clickhouse"),
-        ("chrono",              "chrono"),
-        ("socket2",             "socket2"),
-        ("base64",              "base64"),
-        ("ahash",               "ahash"),
+        ("axum", "Axum"),
+        ("tokio", "Tokio"),
+        ("serde", "Serde"),
+        ("serde_json", "serde_json"),
+        ("sqlx", "SQLx"),
+        ("reqwest", "reqwest"),
+        ("tracing", "tracing"),
+        ("tracing-subscriber", "tracing-subscriber"),
+        ("tower-http", "tower-http"),
+        ("anyhow", "anyhow"),
+        ("dashmap", "DashMap"),
+        ("flume", "flume"),
+        ("ed25519-dalek", "ed25519-dalek"),
+        ("ring", "ring"),
+        ("jsonwebtoken", "jsonwebtoken"),
+        ("bcrypt", "bcrypt"),
+        ("prometheus", "prometheus"),
+        ("clickhouse", "clickhouse"),
+        ("chrono", "chrono"),
+        ("socket2", "socket2"),
+        ("base64", "base64"),
+        ("ahash", "ahash"),
     ];
 
     // Simple block parser: split on [[package]], grab name + version
     let mut versions: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for block in content.split("[[package]]") {
-        let name = block.lines()
+        let name = block
+            .lines()
             .find(|l| l.starts_with("name = "))
             .and_then(|l| l.split('"').nth(1))
             .map(str::to_owned);
-        let ver = block.lines()
+        let ver = block
+            .lines()
             .find(|l| l.starts_with("version = "))
             .and_then(|l| l.split('"').nth(1))
             .map(str::to_owned);
@@ -104,9 +105,7 @@ fn parse_cargo_lock_deps(path: &str) -> String {
     }
 
     want.iter()
-        .filter_map(|(key, label)| {
-            versions.get(*key).map(|v| format!("{}={}", label, v))
-        })
+        .filter_map(|(key, label)| versions.get(*key).map(|v| format!("{}={}", label, v)))
         .collect::<Vec<_>>()
         .join(",")
 }

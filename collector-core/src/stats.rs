@@ -16,7 +16,7 @@ fn clickhouse_url() -> String {
 async fn ch_query(sql: &str) -> Result<serde_json::Value, StatusCode> {
     let client = reqwest::Client::new();
     let resp = client
-        .post(&clickhouse_url())
+        .post(clickhouse_url())
         .query(&[("user", "default")])
         .body(sql.to_string())
         .send()
@@ -93,7 +93,12 @@ pub async fn get_protocol_stats_handler(
         }
     }
 
-    Ok(Json(ProtocolStats { tcp, udp, icmp, other }))
+    Ok(Json(ProtocolStats {
+        tcp,
+        udp,
+        icmp,
+        other,
+    }))
 }
 
 // ─── 2.1 Top talkers ─────────────────────────────────────────────────────────
@@ -187,7 +192,13 @@ pub async fn get_asn_stats_handler(
     let mut merged: HashMap<u64, (u64, u64)> = HashMap::new();
 
     for table in &["network_flows_v4", "network_flows_v6"] {
-        let sql = build_asn_query(table, params.exporter_ip.as_deref(), minutes, limit, direction);
+        let sql = build_asn_query(
+            table,
+            params.exporter_ip.as_deref(),
+            minutes,
+            limit,
+            direction,
+        );
         let val = ch_query(&sql).await?;
         for row in val["data"].as_array().cloned().unwrap_or_default() {
             let asn = parse_u64_field(&row["asn"]);
@@ -203,7 +214,11 @@ pub async fn get_asn_stats_handler(
         .into_iter()
         .map(|(asn, (bytes, pkts))| AsnRow {
             asn,
-            label: if asn == 0 { "Unknown".to_string() } else { format!("AS{asn}") },
+            label: if asn == 0 {
+                "Unknown".to_string()
+            } else {
+                format!("AS{asn}")
+            },
             total_bytes: bytes,
             total_packets: pkts,
         })
@@ -214,7 +229,13 @@ pub async fn get_asn_stats_handler(
     Ok(Json(rows))
 }
 
-fn build_asn_query(table: &str, exporter_ip: Option<&str>, minutes: u32, limit: u32, direction: &str) -> String {
+fn build_asn_query(
+    table: &str,
+    exporter_ip: Option<&str>,
+    minutes: u32,
+    limit: u32,
+    direction: &str,
+) -> String {
     let time_filter = match exporter_ip {
         Some(ip) => format!(
             "WHERE exporter_ip = '{}' AND timestamp >= now() - INTERVAL {} MINUTE",

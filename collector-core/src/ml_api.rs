@@ -9,37 +9,37 @@ use crate::ml_runner::{MlModelStatus, SharedMlStatus};
 #[derive(Serialize)]
 pub struct MlStatus {
     pub llm_enabled: bool,
-    pub llm_model:   String,
-    pub exporters:   Vec<ExporterStatusOut>,
+    pub llm_model: String,
+    pub exporters: Vec<ExporterStatusOut>,
 }
 
 #[derive(Serialize)]
 pub struct ExporterStatusOut {
-    pub exporter_ip:       String,
-    pub status:            &'static str,
+    pub exporter_ip: String,
+    pub status: &'static str,
     pub samples_collected: usize,
-    pub samples_needed:    usize,
-    pub n_scored:          u64,
-    pub anomalies_total:   i64,
+    pub samples_needed: usize,
+    pub n_scored: u64,
+    pub anomalies_total: i64,
 }
 
 #[derive(Serialize)]
 pub struct MlStats {
     pub total_ml_anomalies: i64,
     pub anomalies_last_24h: i64,
-    pub top_offenders:      Vec<TopOffender>,
+    pub top_offenders: Vec<TopOffender>,
     pub severity_breakdown: SeverityBreakdown,
 }
 
 #[derive(Serialize)]
 pub struct TopOffender {
     pub src_ip: String,
-    pub count:  i64,
+    pub count: i64,
 }
 
 #[derive(Serialize)]
 pub struct SeverityBreakdown {
-    pub warning:  i64,
+    pub warning: i64,
     pub critical: i64,
 }
 
@@ -48,12 +48,9 @@ pub async fn get_ml_status(
     axum::Extension(shared_status): axum::Extension<SharedMlStatus>,
 ) -> Result<Json<MlStatus>, StatusCode> {
     let llm_enabled = std::env::var("LLM_ENABLED").as_deref() == Ok("true");
-    let llm_model   = std::env::var("LLM_MODEL").unwrap_or_else(|_| "—".to_string());
+    let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "—".to_string());
 
-    let snapshot: Vec<MlModelStatus> = shared_status
-        .read()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let snapshot: Vec<MlModelStatus> = shared_status.read().map(|g| g.clone()).unwrap_or_default();
 
     let mut exporters_out = Vec::with_capacity(snapshot.len());
     for s in snapshot {
@@ -67,11 +64,11 @@ pub async fn get_ml_status(
         .unwrap_or(0);
 
         exporters_out.push(ExporterStatusOut {
-            exporter_ip:       s.exporter_ip,
-            status:            s.status,
+            exporter_ip: s.exporter_ip,
+            status: s.status,
             samples_collected: s.samples_collected,
-            samples_needed:    s.samples_needed,
-            n_scored:          s.n_scored,
+            samples_needed: s.samples_needed,
+            n_scored: s.n_scored,
             anomalies_total,
         });
     }
@@ -83,9 +80,7 @@ pub async fn get_ml_status(
     }))
 }
 
-pub async fn get_ml_stats(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<MlStats>, StatusCode> {
+pub async fn get_ml_stats(State(state): State<Arc<AppState>>) -> Result<Json<MlStats>, StatusCode> {
     let total = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM alert_events WHERE alert_type = 'ml_anomaly'",
     )
@@ -115,7 +110,7 @@ pub async fn get_ml_stats(
         .iter()
         .map(|r| TopOffender {
             src_ip: r.try_get("src_ip").unwrap_or_default(),
-            count:  r.try_get("cnt").unwrap_or(0),
+            count: r.try_get("cnt").unwrap_or(0),
         })
         .collect();
 
@@ -148,8 +143,14 @@ pub async fn get_ml_events(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let limit:  i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50);
-    let offset: i64 = params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let limit: i64 = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
+    let offset: i64 = params
+        .get("offset")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
 
     let total = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM alert_events WHERE alert_type = 'ml_anomaly'",
@@ -192,5 +193,7 @@ pub async fn get_ml_events(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({ "total": total, "events": events })))
+    Ok(Json(
+        serde_json::json!({ "total": total, "events": events }),
+    ))
 }

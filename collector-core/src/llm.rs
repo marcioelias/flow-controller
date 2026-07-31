@@ -1,42 +1,51 @@
 use crate::alerts::AlertEvent;
 use sqlx::Row;
 
-const MAX_TOKENS:       u32 = 120;
-const REQUEST_TIMEOUT:  std::time::Duration = std::time::Duration::from_secs(30);
-const POLL_INTERVAL:    std::time::Duration = std::time::Duration::from_secs(10);
-const BATCH_SIZE:       i64 = 5;
+const MAX_TOKENS: u32 = 120;
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const BATCH_SIZE: i64 = 5;
 
 pub struct LlmClient {
     endpoint: String,
-    model:    String,
-    client:   reqwest::Client,
+    model: String,
+    client: reqwest::Client,
 }
 
 impl LlmClient {
     /// Build from SQLite settings (preferred) falling back to env vars.
     /// Returns `None` when LLM_ENABLED is not "true" in settings or env.
     pub async fn from_settings(pool: &sqlx::SqlitePool) -> Option<Self> {
-        let enabled = crate::settings::get_value(pool, "LLM_ENABLED").await
+        let enabled = crate::settings::get_value(pool, "LLM_ENABLED")
+            .await
             .unwrap_or_else(|| std::env::var("LLM_ENABLED").unwrap_or_default());
 
         if enabled != "true" {
             return None;
         }
 
-        let endpoint = crate::settings::get_value(pool, "LLM_ENDPOINT").await
-            .unwrap_or_else(|| std::env::var("LLM_ENDPOINT")
-                .unwrap_or_else(|_| "http://ollama:11434".to_string()));
+        let endpoint = crate::settings::get_value(pool, "LLM_ENDPOINT")
+            .await
+            .unwrap_or_else(|| {
+                std::env::var("LLM_ENDPOINT").unwrap_or_else(|_| "http://ollama:11434".to_string())
+            });
 
-        let model = crate::settings::get_value(pool, "LLM_MODEL").await
-            .unwrap_or_else(|| std::env::var("LLM_MODEL")
-                .unwrap_or_else(|_| "qwen2.5:3b".to_string()));
+        let model = crate::settings::get_value(pool, "LLM_MODEL")
+            .await
+            .unwrap_or_else(|| {
+                std::env::var("LLM_MODEL").unwrap_or_else(|_| "qwen2.5:3b".to_string())
+            });
 
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("reqwest LLM client");
 
-        Some(Self { endpoint, model, client })
+        Some(Self {
+            endpoint,
+            model,
+            client,
+        })
     }
 
     /// Fallback for contexts without DB access.
@@ -45,15 +54,18 @@ impl LlmClient {
         if std::env::var("LLM_ENABLED").as_deref() != Ok("true") {
             return None;
         }
-        let endpoint = std::env::var("LLM_ENDPOINT")
-            .unwrap_or_else(|_| "http://ollama:11434".to_string());
-        let model = std::env::var("LLM_MODEL")
-            .unwrap_or_else(|_| "qwen2.5:3b".to_string());
+        let endpoint =
+            std::env::var("LLM_ENDPOINT").unwrap_or_else(|_| "http://ollama:11434".to_string());
+        let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "qwen2.5:3b".to_string());
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("reqwest LLM client");
-        Some(Self { endpoint, model, client })
+        Some(Self {
+            endpoint,
+            model,
+            client,
+        })
     }
 
     pub fn model_name(&self) -> &str {
@@ -68,7 +80,8 @@ impl LlmClient {
             "options": { "num_predict": MAX_TOKENS, "temperature": 0.3 }
         });
 
-        let resp: serde_json::Value = self.client
+        let resp: serde_json::Value = self
+            .client
             .post(format!("{}/api/generate", self.endpoint))
             .json(&body)
             .send()
@@ -96,7 +109,7 @@ fn build_prompt(ev: &AlertEvent) -> String {
              The subscriber historically downloads far more than it uploads. \
              Current window shows upload exceeding download significantly.",
             ev.src_ip,
-            ev.upload_bytes.unwrap_or(0)   as f64 / 125_000.0,
+            ev.upload_bytes.unwrap_or(0) as f64 / 125_000.0,
             ev.download_bytes.unwrap_or(0) as f64 / 125_000.0,
         ),
         "attack_signature" => format!(
@@ -173,13 +186,11 @@ pub async fn run_llm_explainer(pool: sqlx::SqlitePool, client: LlmClient) {
 
             match client.explain(&event).await {
                 Ok(text) => {
-                    let _ = sqlx::query(
-                        "UPDATE alert_events SET explanation = ? WHERE id = ?",
-                    )
-                    .bind(&text)
-                    .bind(event_id)
-                    .execute(&pool)
-                    .await;
+                    let _ = sqlx::query("UPDATE alert_events SET explanation = ? WHERE id = ?")
+                        .bind(&text)
+                        .bind(event_id)
+                        .execute(&pool)
+                        .await;
                     tracing::debug!("LLM explained alert #{event_id}");
                 }
                 Err(e) => tracing::warn!("LLM explain failed for alert #{event_id}: {e}"),
@@ -202,20 +213,20 @@ fn row_to_event(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<AlertEvent> {
     };
 
     Ok(AlertEvent {
-        id:            row.try_get("id")?,
-        rule_id:       row.try_get("rule_id")?,
-        exporter_ip:   row.try_get("exporter_ip")?,
-        src_ip:        row.try_get("src_ip")?,
-        alert_type:    row.try_get("alert_type")?,
+        id: row.try_get("id")?,
+        rule_id: row.try_get("rule_id")?,
+        exporter_ip: row.try_get("exporter_ip")?,
+        src_ip: row.try_get("src_ip")?,
+        alert_type: row.try_get("alert_type")?,
         severity,
-        message:       row.try_get("message")?,
-        upload_bytes:  row.try_get("upload_bytes")?,
+        message: row.try_get("message")?,
+        upload_bytes: row.try_get("upload_bytes")?,
         download_bytes: row.try_get("download_bytes")?,
-        pps:           row.try_get("pps")?,
+        pps: row.try_get("pps")?,
         avg_pkt_bytes: row.try_get("avg_pkt_bytes")?,
-        attack_ports:  row.try_get("attack_ports")?,
-        notified:      row.try_get::<i64, _>("notified")? != 0,
+        attack_ports: row.try_get("attack_ports")?,
+        notified: row.try_get::<i64, _>("notified")? != 0,
         bgp_announced: row.try_get::<i64, _>("bgp_announced")? != 0,
-        created_at:    row.try_get("created_at")?,
+        created_at: row.try_get("created_at")?,
     })
 }

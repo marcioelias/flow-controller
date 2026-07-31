@@ -37,7 +37,8 @@ pub async fn list_rules(
                 enabled: r.try_get::<i64, _>("enabled").unwrap_or(0) != 0,
                 params: {
                     let s: String = r.try_get("params").unwrap_or_default();
-                    serde_json::from_str(&s).unwrap_or(serde_json::Value::Object(Default::default()))
+                    serde_json::from_str(&s)
+                        .unwrap_or(serde_json::Value::Object(Default::default()))
                 },
                 created_at: r.try_get("created_at").ok().flatten(),
             }
@@ -144,10 +145,7 @@ pub async fn update_rule(
     }))
 }
 
-pub async fn delete_rule(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> StatusCode {
+pub async fn delete_rule(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> StatusCode {
     match sqlx::query("DELETE FROM alert_rules WHERE id=?")
         .bind(id)
         .execute(&state.db)
@@ -205,14 +203,24 @@ fn validate_rule_type(
 
     match rule_type {
         "upload_inversion" => {
-            for key in &["short_window_min", "history_window_min", "inversion_ratio", "cooldown_min"] {
+            for key in &[
+                "short_window_min",
+                "history_window_min",
+                "inversion_ratio",
+                "cooldown_min",
+            ] {
                 if params.get(key).is_none() {
                     return bad(&format!("upload_inversion requires param: {key}"));
                 }
             }
         }
         "attack_signature" => {
-            for key in &["window_min", "min_pps", "max_avg_pkt_bytes", "min_total_packets"] {
+            for key in &[
+                "window_min",
+                "min_pps",
+                "max_avg_pkt_bytes",
+                "min_total_packets",
+            ] {
                 if params.get(key).is_none() {
                     return bad(&format!("attack_signature requires param: {key}"));
                 }
@@ -290,7 +298,11 @@ pub async fn list_events(
             alert_type: r.try_get("alert_type").unwrap_or_default(),
             severity: {
                 let s: &str = r.try_get("severity").unwrap_or("warning");
-                if s == "critical" { AlertSeverity::Critical } else { AlertSeverity::Warning }
+                if s == "critical" {
+                    AlertSeverity::Critical
+                } else {
+                    AlertSeverity::Warning
+                }
             },
             message: r.try_get("message").unwrap_or_default(),
             upload_bytes: r.try_get("upload_bytes").ok().flatten(),
@@ -422,7 +434,8 @@ pub async fn test_telegram(
         ));
     }
 
-    let test_msg = "🔵 <b>[TEST]</b> FlowVision alert test message — Telegram integration is working.";
+    let test_msg =
+        "🔵 <b>[TEST]</b> FlowVision alert test message — Telegram integration is working.";
     match crate::telegram::send_message(&cfg, test_msg).await {
         Ok(()) => Ok(Json(TestResult {
             ok: true,
@@ -443,10 +456,7 @@ pub async fn test_telegram(
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
-pub async fn get_exporter_ip(
-    pool: &sqlx::SqlitePool,
-    exporter_id: i64,
-) -> Option<String> {
+pub async fn get_exporter_ip(pool: &sqlx::SqlitePool, exporter_id: i64) -> Option<String> {
     sqlx::query_scalar("SELECT ip_address FROM exporters WHERE id=?")
         .bind(exporter_id)
         .fetch_optional(pool)

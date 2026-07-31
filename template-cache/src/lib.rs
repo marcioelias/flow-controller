@@ -1,12 +1,12 @@
+use ahash::RandomState;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use ahash::RandomState;
 
 /// The template key to identify unique Netflow v9 / IPFIX templates
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TemplateKey {
     pub exporter_ip: Ipv4Addr,
-    pub source_id: u32,  // Observation Domain ID in IPFIX
+    pub source_id: u32, // Observation Domain ID in IPFIX
     pub template_id: u16,
 }
 
@@ -31,6 +31,12 @@ pub struct ThreadLocalTemplateCache {
     cache: HashMap<TemplateKey, Template, RandomState>,
 }
 
+impl Default for ThreadLocalTemplateCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThreadLocalTemplateCache {
     pub fn new() -> Self {
         Self {
@@ -47,10 +53,15 @@ impl ThreadLocalTemplateCache {
     }
 
     pub fn prune_old_templates(&mut self, current_time: u64, max_age_secs: u64) {
-        self.cache.retain(|_, t| current_time.saturating_sub(t.timestamp) < max_age_secs);
+        self.cache
+            .retain(|_, t| current_time.saturating_sub(t.timestamp) < max_age_secs);
     }
 
     pub fn len(&self) -> usize {
         self.cache.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
     }
 }

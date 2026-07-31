@@ -10,11 +10,11 @@
 use rand::Rng;
 use std::collections::VecDeque;
 
-pub const WARMUP_SAMPLES:    usize = 5_000;
-pub const RING_BUFFER_SIZE:  usize = 50_000;
-pub const ANOMALY_THRESHOLD: f64   = 0.65;
+pub const WARMUP_SAMPLES: usize = 5_000;
+pub const RING_BUFFER_SIZE: usize = 50_000;
+pub const ANOMALY_THRESHOLD: f64 = 0.65;
 
-const N_TREES:       usize = 100;
+const N_TREES: usize = 100;
 const SUBSAMPLE_SIZE: usize = 256;
 const MAX_TREE_DEPTH: usize = 16; // ceil(log2(256)) + margin
 
@@ -23,17 +23,21 @@ const MAX_TREE_DEPTH: usize = 16; // ceil(log2(256)) + margin
 // ---------------------------------------------------------------------------
 
 enum ITree {
-    Leaf { size: usize },
+    Leaf {
+        size: usize,
+    },
     Node {
-        feature:   usize,
+        feature: usize,
         threshold: f64,
-        left:      Box<ITree>,
-        right:     Box<ITree>,
+        left: Box<ITree>,
+        right: Box<ITree>,
     },
 }
 
 fn c(n: usize) -> f64 {
-    if n <= 1 { return 0.0; }
+    if n <= 1 {
+        return 0.0;
+    }
     let n = n as f64;
     2.0 * (n - 1.0).ln_1p() + 0.5772156649 - 2.0 * (n - 1.0) / n
 }
@@ -50,7 +54,10 @@ impl ITree {
         let feat = rng.gen_range(0..dim);
 
         let min = data.iter().map(|v| v[feat]).fold(f64::INFINITY, f64::min);
-        let max = data.iter().map(|v| v[feat]).fold(f64::NEG_INFINITY, f64::max);
+        let max = data
+            .iter()
+            .map(|v| v[feat])
+            .fold(f64::NEG_INFINITY, f64::max);
 
         if (max - min).abs() < 1e-12 {
             return ITree::Leaf { size: n };
@@ -58,15 +65,13 @@ impl ITree {
 
         let threshold = rng.gen_range(min..max);
 
-        let (left_data, right_data): (Vec<_>, Vec<_>) = data
-            .iter()
-            .cloned()
-            .partition(|v| v[feat] <= threshold);
+        let (left_data, right_data): (Vec<_>, Vec<_>) =
+            data.iter().cloned().partition(|v| v[feat] <= threshold);
 
         ITree::Node {
             feature: feat,
             threshold,
-            left:  Box::new(ITree::build(&left_data,  depth + 1, rng)),
+            left: Box::new(ITree::build(&left_data, depth + 1, rng)),
             right: Box::new(ITree::build(&right_data, depth + 1, rng)),
         }
     }
@@ -75,7 +80,12 @@ impl ITree {
     fn path_length(&self, x: &[f64], depth: f64) -> f64 {
         match self {
             ITree::Leaf { size } => depth + c(*size),
-            ITree::Node { feature, threshold, left, right } => {
+            ITree::Node {
+                feature,
+                threshold,
+                left,
+                right,
+            } => {
                 if x[*feature] <= *threshold {
                     left.path_length(x, depth + 1.0)
                 } else {
@@ -92,7 +102,7 @@ impl ITree {
 
 struct IsolationForestModel {
     trees: Vec<ITree>,
-    n:     usize, // subsample size used at train time
+    n: usize, // subsample size used at train time
 }
 
 impl IsolationForestModel {
@@ -116,10 +126,16 @@ impl IsolationForestModel {
 
     /// Anomaly score in [0, 1]. Higher = more anomalous.
     fn score(&self, x: &[f64]) -> f64 {
-        let avg_path = self.trees.iter().map(|t| t.path_length(x, 0.0)).sum::<f64>()
+        let avg_path = self
+            .trees
+            .iter()
+            .map(|t| t.path_length(x, 0.0))
+            .sum::<f64>()
             / self.trees.len() as f64;
         let cn = c(self.n);
-        if cn < 1e-12 { return 0.5; }
+        if cn < 1e-12 {
+            return 0.5;
+        }
         2_f64.powf(-avg_path / cn)
     }
 }
@@ -129,16 +145,16 @@ impl IsolationForestModel {
 // ---------------------------------------------------------------------------
 
 pub struct ExporterModel {
-    forest:       Option<IsolationForestModel>,
-    pub buffer:   VecDeque<Vec<f64>>,
+    forest: Option<IsolationForestModel>,
+    pub buffer: VecDeque<Vec<f64>>,
     pub n_scored: u64,
 }
 
 impl ExporterModel {
     pub fn new() -> Self {
         Self {
-            forest:   None,
-            buffer:   VecDeque::new(),
+            forest: None,
+            buffer: VecDeque::new(),
             n_scored: 0,
         }
     }

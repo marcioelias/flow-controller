@@ -88,8 +88,7 @@ pub async fn backup_config_handler(
         license,
     };
 
-    let json = serde_json::to_vec_pretty(&backup)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let json = serde_json::to_vec_pretty(&backup).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let filename = format!("flow-collector-config-{}.json", date_slug);
 
@@ -139,11 +138,14 @@ pub async fn flows_size_handler(
     let total_rows = v4_rows + v6_rows;
     // ~100 bytes per row uncompressed NDJSON, ~12 bytes compressed (gzip ~8:1 ratio on structured data)
     let estimated_uncompressed = total_rows * 100;
-    let estimated_compressed   = total_rows * 12;
+    let estimated_compressed = total_rows * 12;
 
     let gb = estimated_compressed as f64 / 1_000_000_000.0;
     let warning = if gb >= 1.0 {
-        format!("O export comprimido tem ~{:.1} GB. O processo pode levar vários minutos.", gb)
+        format!(
+            "O export comprimido tem ~{:.1} GB. O processo pode levar vários minutos.",
+            gb
+        )
     } else {
         let mb = estimated_compressed as f64 / 1_000_000.0;
         format!("O export comprimido tem ~{:.0} MB.", mb)
@@ -153,7 +155,7 @@ pub async fn flows_size_handler(
         v4_rows,
         v6_rows,
         estimated_bytes_uncompressed: estimated_uncompressed,
-        estimated_bytes_compressed:   estimated_compressed,
+        estimated_bytes_compressed: estimated_compressed,
         warning,
     }))
 }
@@ -166,9 +168,12 @@ async fn query_count(client: &reqwest::Client, url: &str, table: &str) -> u64 {
         .send()
         .await;
     match resp {
-        Ok(r) if r.status().is_success() => {
-            r.text().await.ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0)
-        }
+        Ok(r) if r.status().is_success() => r
+            .text()
+            .await
+            .ok()
+            .and_then(|t| t.trim().parse::<u64>().ok())
+            .unwrap_or(0),
         _ => 0,
     }
 }
@@ -255,7 +260,10 @@ pub async fn restore_config_handler(
     mut multipart: Multipart,
 ) -> Result<Json<RestoreResult>, (StatusCode, Json<serde_json::Value>)> {
     let err = |msg: &str| -> (StatusCode, Json<serde_json::Value>) {
-        (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg })))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
     };
 
     // Read multipart file field
@@ -268,8 +276,8 @@ pub async fn restore_config_handler(
 
     let bytes = file_bytes.ok_or_else(|| err("Campo 'file' ausente"))?;
 
-    let backup: BackupFile = serde_json::from_slice(&bytes)
-        .map_err(|e| err(&format!("JSON inválido: {}", e)))?;
+    let backup: BackupFile =
+        serde_json::from_slice(&bytes).map_err(|e| err(&format!("JSON inválido: {}", e)))?;
 
     if backup.version != BACKUP_VERSION {
         return Err(err(&format!(
@@ -305,11 +313,12 @@ pub async fn restore_config_handler(
     let mut exporters_replaced = 0;
     for e in &backup.exporters {
         // Check if exists first to count replaced vs new
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM exporters WHERE ip_address = ?)")
-            .bind(&e.ip_address)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(false);
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM exporters WHERE ip_address = ?)")
+                .bind(&e.ip_address)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or(false);
 
         sqlx::query(
             "INSERT OR REPLACE INTO exporters (ip_address, name, description, location, enabled) VALUES (?, ?, ?, ?, ?)"
@@ -323,20 +332,22 @@ pub async fn restore_config_handler(
         .await
         .map_err(|e| err(&format!("Erro ao importar exporter: {}", e)))?;
 
-        if exists { exporters_replaced += 1; } else { exporters_imported += 1; }
+        if exists {
+            exporters_replaced += 1;
+        } else {
+            exporters_imported += 1;
+        }
     }
 
     // Restore settings — INSERT OR IGNORE (never overwrite operator values)
     let mut settings_imported = 0;
     for s in &backup.settings {
-        let result = sqlx::query(
-            "UPDATE settings SET value = ? WHERE key = ? AND value = ''"
-        )
-        .bind(&s.value)
-        .bind(&s.key)
-        .execute(&state.db)
-        .await
-        .map_err(|e| err(&format!("Erro ao importar setting: {}", e)))?;
+        let result = sqlx::query("UPDATE settings SET value = ? WHERE key = ? AND value = ''")
+            .bind(&s.value)
+            .bind(&s.key)
+            .execute(&state.db)
+            .await
+            .map_err(|e| err(&format!("Erro ao importar setting: {}", e)))?;
         if result.rows_affected() > 0 {
             settings_imported += 1;
         }

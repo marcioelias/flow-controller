@@ -30,10 +30,11 @@ pub async fn run_detector(state: Arc<AppState>) {
 async fn evaluate_rule(state: &AppState, rule: &AlertRule) -> anyhow::Result<()> {
     // Resolve exporter IP(s) for this rule
     let exporter_ips = if let Some(exp_id) = rule.exporter_id {
-        let ip: Option<String> = sqlx::query_scalar("SELECT ip_address FROM exporters WHERE id = ?")
-            .bind(exp_id)
-            .fetch_optional(&state.db)
-            .await?;
+        let ip: Option<String> =
+            sqlx::query_scalar("SELECT ip_address FROM exporters WHERE id = ?")
+                .bind(exp_id)
+                .fetch_optional(&state.db)
+                .await?;
         match ip {
             Some(ip) => vec![ip],
             None => return Ok(()), // exporter deleted
@@ -67,10 +68,7 @@ async fn evaluate_rule(state: &AppState, rule: &AlertRule) -> anyhow::Result<()>
 // ClickHouse query helper
 // ---------------------------------------------------------------------------
 
-async fn ch_query<T: serde::de::DeserializeOwned>(
-    url: &str,
-    sql: &str,
-) -> anyhow::Result<Vec<T>> {
+async fn ch_query<T: serde::de::DeserializeOwned>(url: &str, sql: &str) -> anyhow::Result<Vec<T>> {
     let resp = reqwest::Client::new()
         .post(url)
         .query(&[("default_format", "JSON")])
@@ -124,10 +122,10 @@ async fn eval_upload_inversion(
     let p = &rule.params;
     let short_min = p["short_window_min"].as_u64().unwrap_or(10) as u32;
     let history_min = p["history_window_min"].as_u64().unwrap_or(1440) as u32;
-    let history_h = (history_min + 59) / 60;
+    let history_h = history_min.div_ceil(60);
     let inversion_ratio = p["inversion_ratio"].as_f64().unwrap_or(2.0);
     let min_hist_dl_ratio = p["min_hist_download_ratio"].as_f64().unwrap_or(3.0);
-    let min_upload_mbps = p["min_upload_mbps"].as_u64().unwrap_or(5) as u64;
+    let min_upload_mbps = p["min_upload_mbps"].as_u64().unwrap_or(5);
     let cooldown_min = p["cooldown_min"].as_i64().unwrap_or(30);
 
     let min_upload_bytes = min_upload_mbps * 125_000 * (short_min as u64) * 60;
@@ -148,7 +146,10 @@ async fn eval_upload_inversion(
         return Ok(());
     }
 
-    let ip_list: Vec<String> = upload_rows.iter().map(|r| format!("'{}'", r.src_ip)).collect();
+    let ip_list: Vec<String> = upload_rows
+        .iter()
+        .map(|r| format!("'{}'", r.src_ip))
+        .collect();
     let ip_csv = ip_list.join(",");
 
     // Step 2: download bytes for those IPs in the same short window
@@ -163,8 +164,10 @@ async fn eval_upload_inversion(
     );
 
     let download_rows: Vec<DownloadRow> = ch_query(&state.clickhouse_url, &download_sql).await?;
-    let download_map: std::collections::HashMap<String, u64> =
-        download_rows.into_iter().map(|r| (r.src_ip, r.download_bytes)).collect();
+    let download_map: std::collections::HashMap<String, u64> = download_rows
+        .into_iter()
+        .map(|r| (r.src_ip, r.download_bytes))
+        .collect();
 
     // Step 3: historical ratio from materialized view
     let hist_sql = format!(
@@ -186,8 +189,10 @@ async fn eval_upload_inversion(
     );
 
     let hist_rows: Vec<HistRow> = ch_query(&state.clickhouse_url, &hist_sql).await?;
-    let hist_map: std::collections::HashMap<String, HistRow> =
-        hist_rows.into_iter().map(|r| (r.src_ip.clone(), r)).collect();
+    let hist_map: std::collections::HashMap<String, HistRow> = hist_rows
+        .into_iter()
+        .map(|r| (r.src_ip.clone(), r))
+        .collect();
 
     for up in &upload_rows {
         let current_download = download_map.get(&up.src_ip).copied().unwrap_or(0);
@@ -243,7 +248,10 @@ async fn eval_upload_inversion(
         };
 
         match alerts::insert_event(&state.db, &event).await {
-            Ok(id) => tracing::info!("Alert #{id}: upload_inversion {} on {exporter_ip}", up.src_ip),
+            Ok(id) => tracing::info!(
+                "Alert #{id}: upload_inversion {} on {exporter_ip}",
+                up.src_ip
+            ),
             Err(e) => tracing::warn!("Failed to insert alert event: {e}"),
         }
     }
@@ -355,7 +363,10 @@ async fn eval_attack_signature(
 
         let event_id = match alerts::insert_event(&state.db, &event).await {
             Ok(id) => {
-                tracing::info!("Alert #{id}: attack_signature {} on {exporter_ip}", row.src_ip);
+                tracing::info!(
+                    "Alert #{id}: attack_signature {} on {exporter_ip}",
+                    row.src_ip
+                );
                 id
             }
             Err(e) => {
@@ -404,7 +415,8 @@ async fn auto_bgp_announce(
                 let pool = state.db.clone();
                 let pipe = state.exabgp_pipe.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(withdraw_after_min * 60)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(withdraw_after_min * 60))
+                        .await;
                     match bgp_control::withdraw(&pool, &pipe, ann_id).await {
                         Ok(_) => tracing::info!("Auto BGP withdraw for announcement #{ann_id}"),
                         Err(e) => tracing::warn!("Auto BGP withdraw failed: {e}"),

@@ -57,22 +57,26 @@ fn main() -> anyhow::Result<()> {
                 data: dummy_data.clone(), // Heavy allocation here mimicking standard Vec behavior
             };
 
-            if let Err(_) = worker_senders[worker_idx].try_send(payload) {
+            if worker_senders[worker_idx].try_send(payload).is_err() {
                 dropped_clone.fetch_add(1, Ordering::Relaxed);
             }
         }
 
         let elapsed = start.elapsed();
         let rate = (target_packets as f64) / elapsed.as_secs_f64();
-        tracing::info!("Dispatcher finished sending {} packets in {:?}", target_packets, elapsed);
+        tracing::info!(
+            "Dispatcher finished sending {} packets in {:?}",
+            target_packets,
+            elapsed
+        );
         tracing::info!("Simulated throughput: {:.2} packets/sec", rate);
     });
 
     dispatcher_thread.join().unwrap();
-    
+
     // Wait for queues to drain a bit
     thread::sleep(Duration::from_millis(500));
-    
+
     let processed = processed_counter.load(Ordering::SeqCst);
     let dropped = dropped_packets.load(Ordering::SeqCst);
     tracing::info!("Total processed: {}", processed);

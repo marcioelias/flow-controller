@@ -387,14 +387,13 @@ pub async fn delete_peer_handler(
 pub async fn list_communities_handler(
     State(state): State<Arc<crate::auth::AppState>>,
 ) -> Result<Json<Vec<BgpCommunity>>, StatusCode> {
-    let rows: Vec<BgpCommunity> =
-        sqlx::query_as("SELECT * FROM bgp_communities ORDER BY id")
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("list_communities error: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let rows: Vec<BgpCommunity> = sqlx::query_as("SELECT * FROM bgp_communities ORDER BY id")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("list_communities error: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(rows))
 }
 
@@ -402,22 +401,21 @@ pub async fn create_community_handler(
     State(state): State<Arc<crate::auth::AppState>>,
     Json(payload): Json<CreateCommunityRequest>,
 ) -> Result<(StatusCode, Json<BgpCommunity>), StatusCode> {
-    let result = sqlx::query(
-        "INSERT INTO bgp_communities (name, community, description) VALUES (?, ?, ?)",
-    )
-    .bind(&payload.name)
-    .bind(&payload.community)
-    .bind(&payload.description)
-    .execute(&state.db)
-    .await
-    .map_err(|e| {
-        if e.to_string().contains("UNIQUE constraint failed") {
-            StatusCode::CONFLICT
-        } else {
-            tracing::error!("create_community error: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    })?;
+    let result =
+        sqlx::query("INSERT INTO bgp_communities (name, community, description) VALUES (?, ?, ?)")
+            .bind(&payload.name)
+            .bind(&payload.community)
+            .bind(&payload.description)
+            .execute(&state.db)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("UNIQUE constraint failed") {
+                    StatusCode::CONFLICT
+                } else {
+                    tracing::error!("create_community error: {}", e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })?;
 
     let id = result.last_insert_rowid();
     let row: BgpCommunity = sqlx::query_as("SELECT * FROM bgp_communities WHERE id = ?")
@@ -434,23 +432,21 @@ pub async fn update_community_handler(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateCommunityRequest>,
 ) -> Result<Json<BgpCommunity>, StatusCode> {
-    sqlx::query(
-        "UPDATE bgp_communities SET name=?, community=?, description=? WHERE id=?",
-    )
-    .bind(&payload.name)
-    .bind(&payload.community)
-    .bind(&payload.description)
-    .bind(id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| {
-        if e.to_string().contains("UNIQUE constraint failed") {
-            StatusCode::CONFLICT
-        } else {
-            tracing::error!("update_community error: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    })?;
+    sqlx::query("UPDATE bgp_communities SET name=?, community=?, description=? WHERE id=?")
+        .bind(&payload.name)
+        .bind(&payload.community)
+        .bind(&payload.description)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                StatusCode::CONFLICT
+            } else {
+                tracing::error!("update_community error: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
 
     let row: BgpCommunity = sqlx::query_as("SELECT * FROM bgp_communities WHERE id = ?")
         .bind(id)
@@ -496,14 +492,13 @@ pub async fn delete_community_handler(
 pub async fn list_prefixes_handler(
     State(state): State<Arc<crate::auth::AppState>>,
 ) -> Result<Json<Vec<BgpPrefix>>, StatusCode> {
-    let rows: Vec<BgpPrefix> =
-        sqlx::query_as("SELECT * FROM bgp_prefixes ORDER BY id")
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("list_prefixes error: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let rows: Vec<BgpPrefix> = sqlx::query_as("SELECT * FROM bgp_prefixes ORDER BY id")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("list_prefixes error: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(rows))
 }
 
@@ -516,21 +511,19 @@ pub async fn create_prefix_handler(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let result = sqlx::query(
-        "INSERT INTO bgp_prefixes (prefix, description) VALUES (?, ?)",
-    )
-    .bind(&payload.prefix)
-    .bind(&payload.description)
-    .execute(&state.db)
-    .await
-    .map_err(|e| {
-        if e.to_string().contains("UNIQUE constraint failed") {
-            StatusCode::CONFLICT
-        } else {
-            tracing::error!("create_prefix error: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    })?;
+    let result = sqlx::query("INSERT INTO bgp_prefixes (prefix, description) VALUES (?, ?)")
+        .bind(&payload.prefix)
+        .bind(&payload.description)
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                StatusCode::CONFLICT
+            } else {
+                tracing::error!("create_prefix error: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
 
     let id = result.last_insert_rowid();
     let row: BgpPrefix = sqlx::query_as("SELECT * FROM bgp_prefixes WHERE id = ?")
@@ -610,18 +603,22 @@ pub async fn list_announcements_handler(
                 LEFT JOIN bgp_peers bp ON bp.id = ba.peer_id";
 
     let sql = if active {
-        format!("{} WHERE ba.withdrawn_at IS NULL ORDER BY ba.announced_at DESC", base)
+        format!(
+            "{} WHERE ba.withdrawn_at IS NULL ORDER BY ba.announced_at DESC",
+            base
+        )
     } else {
         format!("{} ORDER BY ba.announced_at DESC", base)
     };
 
-    let rows: Vec<BgpAnnouncementView> = sqlx::query_as(&sql)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("list_announcements error: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let rows: Vec<BgpAnnouncementView> =
+        sqlx::query_as(&sql)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("list_announcements error: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
     Ok(Json(rows))
 }
@@ -630,13 +627,12 @@ pub async fn announce_route_handler(
     State(state): State<Arc<crate::auth::AppState>>,
     Json(payload): Json<crate::bgp_control::AnnounceRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let (id, command) =
-        crate::bgp_control::announce(&state.db, &state.exabgp_pipe, payload)
-            .await
-            .map_err(|e| {
-                tracing::error!("BGP announce error: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let (id, command) = crate::bgp_control::announce(&state.db, &state.exabgp_pipe, payload)
+        .await
+        .map_err(|e| {
+            tracing::error!("BGP announce error: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok((
         StatusCode::CREATED,
@@ -663,13 +659,12 @@ pub async fn withdraw_route_handler(
 pub async fn apply_config_handler(
     State(state): State<Arc<crate::auth::AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let peer_count =
-        crate::bgp_config::apply_config(&state.db, &state.exabgp_config_path)
-            .await
-            .map_err(|e| {
-                tracing::error!("apply_config error: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let peer_count = crate::bgp_config::apply_config(&state.db, &state.exabgp_config_path)
+        .await
+        .map_err(|e| {
+            tracing::error!("apply_config error: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(serde_json::json!({
         "peers_configured": peer_count,

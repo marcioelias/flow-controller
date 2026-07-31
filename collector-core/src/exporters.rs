@@ -64,7 +64,6 @@ impl From<Exporter> for ExporterResponse {
     }
 }
 
-
 // Initialize exporters table
 pub async fn init_exporters_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -89,11 +88,9 @@ pub async fn init_exporters_table(pool: &SqlitePool) -> Result<(), sqlx::Error> 
 
 // Fetch all enabled exporter IPs for the in-memory whitelist cache
 pub async fn fetch_enabled_ips(pool: &SqlitePool) -> Result<Vec<Ipv4Addr>, sqlx::Error> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT ip_address FROM exporters WHERE enabled = 1"
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT ip_address FROM exporters WHERE enabled = 1")
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -105,15 +102,14 @@ pub async fn fetch_enabled_ips(pool: &SqlitePool) -> Result<Vec<Ipv4Addr>, sqlx:
 pub async fn list_exporters_handler(
     State(state): State<Arc<crate::auth::AppState>>,
 ) -> Result<Json<Vec<ExporterResponse>>, StatusCode> {
-    let exporters = sqlx::query_as::<_, Exporter>(
-        "SELECT * FROM exporters ORDER BY created_at DESC"
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to fetch exporters: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let exporters =
+        sqlx::query_as::<_, Exporter>("SELECT * FROM exporters ORDER BY created_at DESC")
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to fetch exporters: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
     let response: Vec<ExporterResponse> = exporters.into_iter().map(Into::into).collect();
     Ok(Json(response))
@@ -124,17 +120,15 @@ pub async fn get_exporter_handler(
     State(state): State<Arc<crate::auth::AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<ExporterResponse>, StatusCode> {
-    let exporter = sqlx::query_as::<_, Exporter>(
-        "SELECT * FROM exporters WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to fetch exporter: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?
-    .ok_or(StatusCode::NOT_FOUND)?;
+    let exporter = sqlx::query_as::<_, Exporter>("SELECT * FROM exporters WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch exporter: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(exporter.into()))
 }
@@ -174,13 +168,11 @@ pub async fn create_exporter_handler(
 
     let id = result.last_insert_rowid();
 
-    let exporter = sqlx::query_as::<_, Exporter>(
-        "SELECT * FROM exporters WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let exporter = sqlx::query_as::<_, Exporter>("SELECT * FROM exporters WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((StatusCode::CREATED, Json(exporter.into())))
 }
@@ -199,14 +191,12 @@ pub async fn update_exporter_handler(
     }
 
     // Check if exporter exists
-    let _existing = sqlx::query_as::<_, Exporter>(
-        "SELECT * FROM exporters WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
+    let _existing = sqlx::query_as::<_, Exporter>("SELECT * FROM exporters WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     // Build update query dynamically
     let mut query = String::from("UPDATE exporters SET updated_at = CURRENT_TIMESTAMP");
@@ -230,7 +220,11 @@ pub async fn update_exporter_handler(
     }
     if let Some(enabled) = payload.enabled {
         query.push_str(", enabled = ?");
-        bind_values.push(if enabled { "1".to_string() } else { "0".to_string() });
+        bind_values.push(if enabled {
+            "1".to_string()
+        } else {
+            "0".to_string()
+        });
     }
 
     query.push_str(" WHERE id = ?");
@@ -241,23 +235,19 @@ pub async fn update_exporter_handler(
     }
     q = q.bind(id);
 
-    q.execute(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to update exporter: {}", e);
-            if e.to_string().contains("UNIQUE constraint failed") {
-                return StatusCode::CONFLICT;
-            }
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    q.execute(&state.db).await.map_err(|e| {
+        tracing::error!("Failed to update exporter: {}", e);
+        if e.to_string().contains("UNIQUE constraint failed") {
+            return StatusCode::CONFLICT;
+        }
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    let updated = sqlx::query_as::<_, Exporter>(
-        "SELECT * FROM exporters WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let updated = sqlx::query_as::<_, Exporter>("SELECT * FROM exporters WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(updated.into()))
 }
@@ -288,7 +278,7 @@ pub async fn list_enabled_exporters_handler(
     State(state): State<Arc<crate::auth::AppState>>,
 ) -> Result<Json<Vec<ExporterResponse>>, StatusCode> {
     let exporters = sqlx::query_as::<_, Exporter>(
-        "SELECT * FROM exporters WHERE enabled = 1 ORDER BY name ASC"
+        "SELECT * FROM exporters WHERE enabled = 1 ORDER BY name ASC",
     )
     .fetch_all(&state.db)
     .await
