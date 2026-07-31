@@ -406,7 +406,14 @@ pub async fn get_timeline_handler(
     State(_state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<TimelineQuery>,
 ) -> Result<Json<Vec<TimelinePoint>>, StatusCode> {
-    let hours = params.hours.unwrap_or(1).min(24);
+    // up to 7 days — the dashboard heatmap aggregates 168h client-side
+    let hours = params.hours.unwrap_or(1).min(168);
+    // minute buckets get heavy past 24h; switch to hourly granularity
+    let bucket_fn = if params.hours.unwrap_or(1) > 24 {
+        "toStartOfHour"
+    } else {
+        "toStartOfMinute"
+    };
     let wc = where_clause(params.exporter_ip.as_deref(), hours, "HOUR");
 
     // Single pass per table: sumIf splits by direction without extra scans
@@ -417,10 +424,10 @@ pub async fn get_timeline_handler(
                 sumIf(bytes, direction = 255) AS unknown_bytes, \
                 sumIf(packets, direction = 255) AS unknown_packets";
     let sql = format!(
-        "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, {dir_cols} \
+        "SELECT toUnixTimestamp({bucket_fn}(timestamp)) AS minute, {dir_cols} \
          FROM network_flows_v4 {wc} GROUP BY minute ORDER BY minute ASC \
          UNION ALL \
-         SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, {dir_cols} \
+         SELECT toUnixTimestamp({bucket_fn}(timestamp)) AS minute, {dir_cols} \
          FROM network_flows_v6 {wc} GROUP BY minute ORDER BY minute ASC \
          FORMAT JSON"
     );
