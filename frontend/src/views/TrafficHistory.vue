@@ -13,7 +13,7 @@ import {
   Legend,
   Filler,
 } from 'chart.js'
-import { TrendingUp, RefreshCw } from 'lucide-vue-next'
+import { TrendingUp, RefreshCw, ArrowDown, ArrowUp } from 'lucide-vue-next'
 import { formatBytes } from '../utils/format'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler)
@@ -30,6 +30,12 @@ interface TimelinePoint {
   minute: number
   total_bytes: number
   total_packets: number
+  in_bytes: number
+  in_packets: number
+  out_bytes: number
+  out_packets: number
+  unknown_bytes: number
+  unknown_packets: number
 }
 
 const exporters = ref<Exporter[]>([])
@@ -45,6 +51,12 @@ const hourOptions = [
   { label: 'Últimas 24h', value: 24 },
 ]
 
+// Series colors — validated pair on the zinc-900 surface (dataviz palette,
+// dark slots 1/2); unknown band is deliberately neutral
+const COLOR_IN = '#3987e5'
+const COLOR_OUT = '#d95926'
+const COLOR_UNKNOWN = '#a1a1aa'
+
 function toMbps(bytes: number): number {
   return (bytes * 8) / 1e6 / 60
 }
@@ -56,67 +68,126 @@ function formatLabel(ts: number): string {
     : d.toLocaleString('pt-BR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-const lineChartData = computed(() => ({
-  labels: points.value.map((p) => formatLabel(p.minute)),
-  datasets: [
+// Exporters that don't report IE 61 leave everything in unknown_*.
+// When the whole window is unknown, fall back to a single total series
+// instead of a mirrored chart with an empty bottom half.
+const hasDirection = computed(() =>
+  points.value.some((p) => p.in_bytes > 0 || p.out_bytes > 0),
+)
+
+const hasUnknown = computed(() => points.value.some((p) => p.unknown_bytes > 0))
+
+const lineChartData = computed(() => {
+  const labels = points.value.map((p) => formatLabel(p.minute))
+
+  if (!hasDirection.value) {
+    return {
+      labels,
+      datasets: [
+        {
+          label: 'Tráfego (Mbps)',
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16,185,129,0.1)',
+          borderWidth: 2,
+          data: points.value.map((p) => +toMbps(p.total_bytes).toFixed(3)),
+          tension: 0.3,
+          fill: true,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        },
+      ],
+    }
+  }
+
+  const datasets: any[] = [
     {
-      label: 'Tráfego (Mbps)',
-      borderColor: '#10b981',
-      backgroundColor: 'rgba(16,185,129,0.1)',
+      label: 'Entrada (Mbps)',
+      borderColor: COLOR_IN,
+      backgroundColor: 'rgba(57,135,229,0.15)',
       borderWidth: 2,
-      data: points.value.map((p) => parseFloat(toMbps(p.total_bytes).toFixed(3))),
+      // mirrored: inbound above the axis
+      data: points.value.map((p) => +toMbps(p.in_bytes).toFixed(3)),
       tension: 0.3,
       fill: true,
       pointRadius: 0,
       pointHoverRadius: 4,
     },
-  ],
-}))
+    {
+      label: 'Saída (Mbps)',
+      borderColor: COLOR_OUT,
+      backgroundColor: 'rgba(217,89,38,0.15)',
+      borderWidth: 2,
+      // mirrored: outbound below the axis (negated; labels use abs)
+      data: points.value.map((p) => -toMbps(p.out_bytes).toFixed(3)),
+      tension: 0.3,
+      fill: true,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+    },
+  ]
 
-const lineChartOptions = {
+  if (hasUnknown.value) {
+    datasets.push({
+      label: 'Sem direção (Mbps)',
+      borderColor: COLOR_UNKNOWN,
+      backgroundColor: 'rgba(161,161,170,0.08)',
+      borderWidth: 1.5,
+      borderDash: [4, 3],
+      data: points.value.map((p) => +toMbps(p.unknown_bytes).toFixed(3)),
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+    })
+  }
+
+  return { labels, datasets }
+})
+
+const lineChartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   animation: { duration: 0 },
   interaction: { mode: 'index' as const, intersect: false },
   plugins: {
-    legend: { display: false },
+    legend: {
+      display: hasDirection.value,
+      labels: { color: '#9ca3af', usePointStyle: true, boxHeight: 6 },
+    },
     tooltip: {
       callbacks: {
-        label: (ctx: any) => ` ${ctx.parsed.y.toFixed(2)} Mbps`,
+        // outbound is plotted negative — always show absolute values
+        label: (ctx: any) => ` ${ctx.dataset.label}: ${Math.abs(ctx.parsed.y).toFixed(2)} Mbps`,
       },
     },
   },
   scales: {
     x: {
-      ticks: {
-        color: '#9ca3af',
-        maxRotation: 0,
-        autoSkip: true,
-        maxTicksLimit: 8,
-      },
+      ticks: { color: '#9ca3af', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
       grid: { display: false },
     },
     y: {
       ticks: {
         color: '#9ca3af',
-        callback: (v: any) => v.toFixed(1) + ' Mbps',
+        // never show a negative byte label on the mirrored axis
+        callback: (v: any) => Math.abs(v).toFixed(1) + ' Mbps',
       },
-      grid: { color: '#374151' },
-      beginAtZero: true,
+      grid: {
+        color: (ctx: any) => (ctx.tick.value === 0 ? '#52525b' : '#374151'),
+      },
     },
   },
-}
+}))
 
-const peak = computed(() => {
-  if (points.value.length === 0) return 0
-  return Math.max(...points.value.map((p) => p.total_bytes))
-})
-
-const average = computed(() => {
-  if (points.value.length === 0) return 0
-  return points.value.reduce((s, p) => s + p.total_bytes, 0) / points.value.length
-})
-
+const peakIn = computed(() =>
+  points.value.length ? Math.max(...points.value.map((p) => (hasDirection.value ? p.in_bytes : p.total_bytes))) : 0,
+)
+const peakOut = computed(() =>
+  points.value.length ? Math.max(...points.value.map((p) => p.out_bytes)) : 0,
+)
+const average = computed(() =>
+  points.value.length ? points.value.reduce((s, p) => s + p.total_bytes, 0) / points.value.length : 0,
+)
 const total = computed(() => points.value.reduce((s, p) => s + p.total_bytes, 0))
 
 async function loadExporters() {
@@ -149,7 +220,9 @@ let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   loadExporters()
   loadData()
-  timer = setInterval(loadData, 60000)
+  timer = setInterval(() => {
+    if (document.visibilityState === 'visible') loadData()
+  }, 60000)
 })
 
 onUnmounted(() => {
@@ -167,7 +240,10 @@ onUnmounted(() => {
             <TrendingUp class="w-6 h-6 text-emerald-500" />
             Histórico de Tráfego
           </h1>
-          <p class="text-zinc-400 mt-1">Série temporal com buckets de 1 minuto</p>
+          <p class="text-zinc-400 mt-1">
+            Série temporal com buckets de 1 minuto
+            <span v-if="hasDirection"> — entrada acima, saída abaixo do eixo</span>
+          </p>
         </div>
 
         <div class="flex items-center gap-3">
@@ -202,22 +278,41 @@ onUnmounted(() => {
         </div>
       </header>
 
+      <!-- Hint: exporters not reporting direction -->
+      <div
+        v-if="hasDirection && hasUnknown"
+        class="text-xs text-zinc-500 bg-zinc-900/60 border border-zinc-800 rounded-lg px-4 py-2"
+      >
+        Parte do tráfego aparece como "sem direção": um ou mais exporters não enviam o campo
+        flowDirection (IE 61). Habilite-o no roteador para o gráfico espelhado completo.
+      </div>
+
       <!-- Chart -->
       <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
         <div v-if="points.length === 0 && !loading" class="flex flex-col items-center justify-center py-20 text-zinc-500 gap-2">
           <TrendingUp class="w-10 h-10" />
           <p>Nenhum dado disponível para este período.</p>
         </div>
-        <div v-else class="h-72">
+        <div v-else class="h-80">
           <Line :data="lineChartData" :options="lineChartOptions" />
         </div>
       </div>
 
       <!-- Summary stats -->
-      <div class="grid grid-cols-3 gap-4">
+      <div class="grid gap-4" :class="hasDirection ? 'grid-cols-4' : 'grid-cols-3'">
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-          <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1">Pico</p>
-          <p class="text-2xl font-bold text-slate-100">{{ toMbps(peak).toFixed(1) }} <span class="text-base font-normal text-zinc-400">Mbps</span></p>
+          <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+            <ArrowDown v-if="hasDirection" class="w-3 h-3" :style="{ color: COLOR_IN }" />
+            {{ hasDirection ? 'Pico Entrada' : 'Pico' }}
+          </p>
+          <p class="text-2xl font-bold text-slate-100">{{ toMbps(peakIn).toFixed(1) }} <span class="text-base font-normal text-zinc-400">Mbps</span></p>
+        </div>
+        <div v-if="hasDirection" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+          <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+            <ArrowUp class="w-3 h-3" :style="{ color: COLOR_OUT }" />
+            Pico Saída
+          </p>
+          <p class="text-2xl font-bold text-slate-100">{{ toMbps(peakOut).toFixed(1) }} <span class="text-base font-normal text-zinc-400">Mbps</span></p>
         </div>
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
           <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1">Média</p>

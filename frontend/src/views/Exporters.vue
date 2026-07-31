@@ -19,11 +19,54 @@ interface Exporter {
   updated_at: string
 }
 
+interface ExporterSummary {
+  exporter_ip: string
+  direction_mode: string
+}
+
 const exporters = ref<Exporter[]>([])
+const directionModes = ref<Record<string, string>>({})
 const loading = ref(false)
 const error = ref('')
 const showDeleteConfirm = ref(false)
 const exporterToDelete = ref<Exporter | null>(null)
+
+// direction_mode → badge label + style; "in+out" warns about double counting
+const directionBadge: Record<string, { label: string; cls: string; title: string }> = {
+  'in+out': {
+    label: 'in + out',
+    cls: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+    title:
+      'Este exporter envia flows de entrada e saída — totais somados podem contar o mesmo pacote duas vezes',
+  },
+  in: {
+    label: 'in',
+    cls: 'bg-blue-500/10 text-blue-400 border border-blue-500/20',
+    title: 'Exporter envia apenas flows de entrada (ingress)',
+  },
+  out: {
+    label: 'out',
+    cls: 'bg-orange-500/10 text-orange-400 border border-orange-500/20',
+    title: 'Exporter envia apenas flows de saída (egress)',
+  },
+  none: {
+    label: 'sem direção',
+    cls: 'bg-zinc-700 text-zinc-400 border border-zinc-600',
+    title:
+      'Exporter não envia o campo flowDirection (IE 61) — habilite no roteador para gráficos in/out',
+  },
+}
+
+async function loadDirectionModes() {
+  try {
+    const response = await fetch('/api/stats/exporters?minutes=60', {
+      headers: { Authorization: `Bearer ${authStore.token}` },
+    })
+    if (!response.ok) return
+    const rows: ExporterSummary[] = await response.json()
+    directionModes.value = Object.fromEntries(rows.map((r) => [r.exporter_ip, r.direction_mode]))
+  } catch {}
+}
 
 async function loadExporters() {
   loading.value = true
@@ -87,6 +130,7 @@ async function deleteExporter() {
 
 onMounted(() => {
   loadExporters()
+  loadDirectionModes()
 })
 </script>
 
@@ -160,6 +204,13 @@ onMounted(() => {
                     ]"
                   >
                     {{ exporter.enabled ? 'Ativo' : 'Inativo' }}
+                  </span>
+                  <span
+                    v-if="directionModes[exporter.ip_address]"
+                    :class="['px-2 py-1 text-xs font-medium rounded', directionBadge[directionModes[exporter.ip_address]]?.cls]"
+                    :title="directionBadge[directionModes[exporter.ip_address]]?.title"
+                  >
+                    {{ directionBadge[directionModes[exporter.ip_address]]?.label }}
                   </span>
                 </div>
 
