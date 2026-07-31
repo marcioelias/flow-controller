@@ -25,6 +25,9 @@ pub struct CollectorMetrics {
     pub export_queue_depth: IntGauge,
     /// Sampling rate learned per exporter observation domain (1 = unsampled)
     pub exporter_sampling_rate: IntGaugeVec,
+    /// 1 when an exporter reported both ingress and egress flows in the same
+    /// window — summed totals would double-count that exporter
+    pub exporter_bidirectional: IntGaugeVec,
     /// DEPRECATED: same value as packets_received — kept so existing
     /// dashboards reading flows_received_total keep working
     pub flows_received: IntCounter,
@@ -123,6 +126,17 @@ impl CollectorMetrics {
         registry
             .register(Box::new(exporter_sampling_rate.clone()))
             .unwrap();
+        let exporter_bidirectional = IntGaugeVec::new(
+            Opts::new(
+                "exporter_bidirectional",
+                "1 when the exporter reports both ingress and egress (IE 61) in the same window",
+            ),
+            &["exporter_ip"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(exporter_bidirectional.clone()))
+            .unwrap();
 
         Self {
             registry,
@@ -138,6 +152,7 @@ impl CollectorMetrics {
             template_cache_size,
             export_queue_depth,
             exporter_sampling_rate,
+            exporter_bidirectional,
             flows_received,
         }
     }

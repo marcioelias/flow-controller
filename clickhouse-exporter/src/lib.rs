@@ -19,6 +19,8 @@ pub struct NetworkFlowV4Row {
     pub packets: u64,
     pub bytes: u64,
     pub flow_count: u64,
+    /// 0 = ingress, 1 = egress, 255 = not reported (IE 61)
+    pub direction: u8,
 }
 
 /// Aggregated IPv6 flow. `[u8; 16]` maps onto a ClickHouse `IPv6` column.
@@ -36,6 +38,8 @@ pub struct NetworkFlowV6Row {
     pub packets: u64,
     pub bytes: u64,
     pub flow_count: u64,
+    /// 0 = ingress, 1 = egress, 255 = not reported (IE 61)
+    pub direction: u8,
 }
 
 /// String-typed rows for installations still on the legacy `String` schema
@@ -53,6 +57,7 @@ struct LegacyRow {
     packets: u64,
     bytes: u64,
     flow_count: u64,
+    direction: u8,
 }
 
 pub struct ClickhouseExporter {
@@ -124,7 +129,8 @@ impl ClickhouseExporter {
                 dst_asn UInt32,
                 packets UInt64,
                 bytes UInt64,
-                flow_count UInt64
+                flow_count UInt64,
+                direction UInt8 DEFAULT 255
             )
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
@@ -149,7 +155,8 @@ impl ClickhouseExporter {
                 dst_asn UInt32,
                 packets UInt64,
                 bytes UInt64,
-                flow_count UInt64
+                flow_count UInt64,
+                direction UInt8 DEFAULT 255
             )
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
@@ -170,6 +177,8 @@ impl ClickhouseExporter {
             "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS src_port UInt16 DEFAULT 0",
             "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS src_asn UInt32 DEFAULT 0",
             "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS dst_asn UInt32 DEFAULT 0",
+            "ALTER TABLE network_flows_v4 ADD COLUMN IF NOT EXISTS direction UInt8 DEFAULT 255",
+            "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS direction UInt8 DEFAULT 255",
         ];
         for sql in &alters {
             self.client.query(sql).execute().await?;
@@ -312,6 +321,7 @@ impl ClickhouseExporter {
                         packets: row.packets,
                         bytes: row.bytes,
                         flow_count: row.flow_count,
+                        direction: row.direction,
                     })
                     .await?;
             }
@@ -335,6 +345,7 @@ impl ClickhouseExporter {
                         packets: row.packets,
                         bytes: row.bytes,
                         flow_count: row.flow_count,
+                        direction: row.direction,
                     })
                     .await?;
             }

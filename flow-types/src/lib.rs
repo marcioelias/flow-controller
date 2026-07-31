@@ -94,4 +94,11 @@ pub struct NormalizedFlow {
     /// Sampling rate learned from the exporter's options template (1 = unsampled).
     /// `bytes` and `packets` are already scaled by this factor.
     pub sampling_rate: u32,
+    /// Direction from the router's perspective (IE 61):
+    /// 0 = ingress, 1 = egress, 255 = not reported
+    pub direction: u8,
 }
+
+pub const DIRECTION_INGRESS: u8 = 0;
+pub const DIRECTION_EGRESS: u8 = 1;
+pub const DIRECTION_UNKNOWN: u8 = 255;

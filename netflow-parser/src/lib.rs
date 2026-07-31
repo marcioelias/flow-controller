@@ -70,8 +70,12 @@ pub const IANA_PROTOCOL: u16 = 4;
 pub const IANA_TCP_FLAGS: u16 = 6;
 pub const IANA_L4_SRC_PORT: u16 = 7;
 pub const IANA_IPV4_SRC_ADDR: u16 = 8;
+pub const IANA_INGRESS_IFACE: u16 = 10;
 pub const IANA_L4_DST_PORT: u16 = 11;
 pub const IANA_IPV4_DST_ADDR: u16 = 12;
+pub const IANA_EGRESS_IFACE: u16 = 14;
+/// 0 = ingress, 1 = egress (router perspective)
+pub const IANA_FLOW_DIRECTION: u16 = 61;
 pub const IANA_BGP_SRC_ASN: u16 = 16;
 pub const IANA_BGP_DST_ASN: u16 = 17;
 pub const IANA_IPV6_SRC_ADDR: u16 = 27;
@@ -340,6 +344,7 @@ fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFl
         egress_interface: 0,
         tcp_flags: 0,
         sampling_rate: 1,
+        direction: flow_types::DIRECTION_UNKNOWN,
     }
 }
 
@@ -391,6 +396,13 @@ fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8]) {
         }
         IANA_BGP_SRC_ASN => flow.src_asn = read_uint(field_data) as u32,
         IANA_BGP_DST_ASN => flow.dst_asn = read_uint(field_data) as u32,
+        IANA_INGRESS_IFACE => flow.ingress_interface = read_uint(field_data) as u32,
+        IANA_EGRESS_IFACE => flow.egress_interface = read_uint(field_data) as u32,
+        IANA_FLOW_DIRECTION => {
+            if f_len == 1 && field_data[0] <= 1 {
+                flow.direction = field_data[0];
+            }
+        }
         _ => {}
     }
 }
@@ -1111,6 +1123,57 @@ mod tests {
         assert_eq!(flows[0].bytes, 50_000);
         assert_eq!(flows[0].packets, 5_000);
         assert_eq!(flows[0].sampling_rate, 1000);
+    }
+
+    #[test]
+    fn test_flow_direction_decoded() {
+        // Template: flowDirection(61,1) + ingressIface(10,4) + IN_BYTES(8)
+        let template_id: u16 = 900;
+        let tmpl_set_len = 4 + 4 + 3 * 4;
+        let data_set_len = 4 + 1 + 4 + 8;
+        let total = 16 + tmpl_set_len + data_set_len;
+
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&(total as u16).to_be_bytes());
+        pkt.extend_from_slice(&1700000000u32.to_be_bytes());
+        pkt.extend_from_slice(&1u32.to_be_bytes());
+        pkt.extend_from_slice(&500u32.to_be_bytes());
+
+        pkt.extend_from_slice(&2u16.to_be_bytes());
+        pkt.extend_from_slice(&(tmpl_set_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&3u16.to_be_bytes());
+        pkt.extend_from_slice(&IANA_FLOW_DIRECTION.to_be_bytes());
+        pkt.extend_from_slice(&1u16.to_be_bytes());
+        pkt.extend_from_slice(&IANA_INGRESS_IFACE.to_be_bytes());
+        pkt.extend_from_slice(&4u16.to_be_bytes());
+        pkt.extend_from_slice(&IANA_IN_BYTES.to_be_bytes());
+        pkt.extend_from_slice(&8u16.to_be_bytes());
+
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(data_set_len as u16).to_be_bytes());
+        pkt.push(1u8); // egress
+        pkt.extend_from_slice(&7u32.to_be_bytes()); // ingress iface 7
+        pkt.extend_from_slice(&1234u64.to_be_bytes());
+
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 8));
+        let mut cache = ThreadLocalTemplateCache::new();
+        let flows = parse_packet(&pkt, &mut cache, exporter).expect("direction parse");
+
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].direction, 1);
+        assert_eq!(flows[0].ingress_interface, 7);
+        assert_eq!(flows[0].bytes, 1234);
+    }
+
+    #[test]
+    fn test_flow_direction_absent_is_unknown() {
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 9));
+        let pkt = build_v9_packet([192, 168, 1, 10], [8, 8, 8, 8], 100, 10);
+        let flows = parse_packet(&pkt, &mut cache, exporter).expect("v9 parse");
+        assert_eq!(flows[0].direction, flow_types::DIRECTION_UNKNOWN);
     }
 
     #[test]

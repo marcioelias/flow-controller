@@ -53,7 +53,8 @@ migrate_table() {
             dst_asn UInt32,
             packets UInt64,
             bytes UInt64,
-            flow_count UInt64
+            flow_count UInt64,
+            direction UInt8 DEFAULT 255
         )
         ENGINE = MergeTree()
         PARTITION BY toYYYYMMDD(timestamp)
@@ -68,7 +69,7 @@ migrate_table() {
                to${SRC_TYPE}OrDefault(src_ip),
                to${DST_TYPE}OrDefault(dst_ip),
                src_port, dst_port, protocol, src_asn, dst_asn,
-               packets, bytes, flow_count
+               packets, bytes, flow_count, direction
         FROM ${TABLE}"
 
     local OLD NEW

@@ -93,6 +93,8 @@ pub struct DebugFlow {
     pub egress_if: u32,
     pub tcp_flags: u8,
     pub flow_count: u64,
+    /// 0 = ingress, 1 = egress, 255 = not reported (IE 61)
+    pub direction: u8,
 }
 
 // Prometheus metrics handler (no auth — scraped externally)
@@ -765,16 +767,33 @@ fn main() -> anyhow::Result<()> {
                     let mut window_total_bytes = 0;
                     let mut per_device_bytes: std::collections::HashMap<String, u64> =
                         std::collections::HashMap::new();
+                    // Which directions each exporter reported this window —
+                    // both = totals would double-count if simply summed
+                    let mut dir_seen: std::collections::HashMap<Ipv4Addr, (bool, bool)> =
+                        std::collections::HashMap::new();
                     for (key, m) in map.iter() {
                         window_total_bytes += m.bytes;
                         *per_device_bytes
                             .entry(key.exporter_ip.to_string())
                             .or_insert(0) += m.bytes;
 
+                        let seen = dir_seen.entry(key.exporter_ip).or_default();
+                        match key.direction {
+                            flow_types::DIRECTION_INGRESS => seen.0 = true,
+                            flow_types::DIRECTION_EGRESS => seen.1 = true,
+                            _ => {}
+                        }
+
                         let e = merge.entry((now, *key)).or_default();
                         e.bytes += m.bytes;
                         e.packets += m.packets;
                         e.flow_count += m.flow_count;
+                    }
+                    for (exp_ip, (ing, egr)) in dir_seen {
+                        exporter_metrics
+                            .exporter_bidirectional
+                            .with_label_values(&[&exp_ip.to_string()])
+                            .set((ing && egr) as i64);
                     }
                     let _ = ws_tx.send(LiveFlowStats {
                         timestamp_sec: now,
@@ -812,6 +831,7 @@ fn main() -> anyhow::Result<()> {
                             packets: metrics.packets,
                             bytes: metrics.bytes,
                             flow_count: metrics.flow_count,
+                            direction: key.direction,
                         });
                     }
                     (flow_types::IpAddrType::V6(src_ip), flow_types::IpAddrType::V6(dst_ip)) => {
@@ -828,6 +848,7 @@ fn main() -> anyhow::Result<()> {
                             packets: metrics.packets,
                             bytes: metrics.bytes,
                             flow_count: metrics.flow_count,
+                            direction: key.direction,
                         });
                     }
                     _ => {} // Mixed IPs (impossible organically)
@@ -1057,6 +1078,7 @@ fn worker_loop(
                                 egress_if: flow.egress_interface,
                                 tcp_flags: flow.tcp_flags,
                                 flow_count: 1,
+                                direction: flow.direction,
                             });
                         }
                         aggregator.aggregate(&flow);

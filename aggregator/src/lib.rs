@@ -13,6 +13,9 @@ pub struct AggregationKey {
     pub protocol: u8,
     pub src_asn: u32,
     pub dst_asn: u32,
+    /// Router-reported direction (IE 61): flows in opposite directions must
+    /// not merge, otherwise in/out split is lost
+    pub direction: u8,
 }
 
 /// The accumulated metrics for a given AggregationKey
@@ -55,6 +58,7 @@ impl ThreadLocalAggregator {
             protocol: flow.protocol,
             src_asn: flow.src_asn,
             dst_asn: flow.dst_asn,
+            direction: flow.direction,
         };
 
         let metrics = self.map.entry(key).or_default();
