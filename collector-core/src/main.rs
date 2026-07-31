@@ -992,8 +992,6 @@ fn receiver_loop(
                 };
 
                 collector_metrics.packets_received.inc();
-                // DEPRECATED alias — remove once dashboards migrate
-                collector_metrics.flows_received.inc();
 
                 if let Err(flume::TrySendError::Full(_)) =
                     worker_senders[worker_idx].try_send(payload)

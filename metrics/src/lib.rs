@@ -28,9 +28,6 @@ pub struct CollectorMetrics {
     /// 1 when an exporter reported both ingress and egress flows in the same
     /// window — summed totals would double-count that exporter
     pub exporter_bidirectional: IntGaugeVec,
-    /// DEPRECATED: same value as packets_received — kept so existing
-    /// dashboards reading flows_received_total keep working
-    pub flows_received: IntCounter,
 }
 
 impl Default for CollectorMetrics {
@@ -110,11 +107,6 @@ impl CollectorMetrics {
             "export_queue_depth",
             "Aggregation windows waiting in the export queue",
         );
-        let flows_received = counter(
-            &registry,
-            "flows_received_total",
-            "DEPRECATED: same as packets_received_total (kept for old dashboards)",
-        );
         let exporter_sampling_rate = IntGaugeVec::new(
             Opts::new(
                 "exporter_sampling_rate",
@@ -153,7 +145,6 @@ impl CollectorMetrics {
             export_queue_depth,
             exporter_sampling_rate,
             exporter_bidirectional,
-            flows_received,
         }
     }
 }

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clickhouse::{Client, Row};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Aggregated IPv4 flow. IPs are numeric — RowBinary maps `u32` straight onto
 /// a ClickHouse `IPv4` column with no allocation.
@@ -42,43 +41,15 @@ pub struct NetworkFlowV6Row {
     pub direction: u8,
 }
 
-/// String-typed rows for installations still on the legacy `String` schema
-#[derive(Row, Serialize, Clone, Debug)]
-struct LegacyRow {
-    timestamp: u32,
-    exporter_ip: String,
-    src_ip: String,
-    dst_ip: String,
-    src_port: u16,
-    dst_port: u16,
-    protocol: u8,
-    src_asn: u32,
-    dst_asn: u32,
-    packets: u64,
-    bytes: u64,
-    flow_count: u64,
-    direction: u8,
-}
-
 pub struct ClickhouseExporter {
     client: Client,
-    /// True while the connected database still uses `String` IP columns.
-    /// Detected in `setup_tables`; never auto-migrated (see task 10.12).
-    legacy_schema: AtomicBool,
 }
 
 impl ClickhouseExporter {
     pub fn new(url: &str) -> Self {
         let client = Client::default().with_url(url).with_database("default");
 
-        Self {
-            client,
-            legacy_schema: AtomicBool::new(false),
-        }
-    }
-
-    pub fn is_legacy_schema(&self) -> bool {
-        self.legacy_schema.load(Ordering::Relaxed)
+        Self { client }
     }
 
     /// Returns the type of `src_ip` in an existing table, if the table exists
@@ -97,16 +68,15 @@ impl ClickhouseExporter {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
 
-        // Existing install on the legacy String schema? Never migrate it
-        // silently — a MODIFY COLUMN rewrite on a large table is an operator
-        // decision. scripts/migrate-ip-columns.sh does it explicitly.
+        // Pre-1.2 dev databases used String IP columns; there is no production
+        // install to migrate, so refuse to run and tell the operator to recreate
         if let Some(ip_type) = self.detect_ip_column_type("network_flows_v4").await {
             if ip_type == "String" {
-                self.legacy_schema.store(true, Ordering::Relaxed);
-                tracing::warn!(
-                    "network_flows_v4/v6 still use String IP columns. \
-                     Native IPv4/IPv6 columns cut storage and speed up queries. \
-                     Migrate explicitly with: scripts/migrate-ip-columns.sh"
+                anyhow::bail!(
+                    "network_flows_v4/v6 use the old String IP schema. \
+                     Drop them (DROP TABLE network_flows_v4; DROP TABLE network_flows_v6; \
+                     DROP VIEW ip_hourly_tx_v4; DROP VIEW ip_hourly_rx_v4) and restart \
+                     — tables are recreated with native IPv4/IPv6 columns."
                 );
             }
         }
@@ -168,21 +138,6 @@ impl ClickhouseExporter {
 
         self.client.query(ddl_v4.as_str()).execute().await?;
         self.client.query(ddl_v6.as_str()).execute().await?;
-
-        // Idempotent migrations for existing installations
-        let alters = [
-            "ALTER TABLE network_flows_v4 ADD COLUMN IF NOT EXISTS src_port UInt16 DEFAULT 0",
-            "ALTER TABLE network_flows_v4 ADD COLUMN IF NOT EXISTS src_asn UInt32 DEFAULT 0",
-            "ALTER TABLE network_flows_v4 ADD COLUMN IF NOT EXISTS dst_asn UInt32 DEFAULT 0",
-            "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS src_port UInt16 DEFAULT 0",
-            "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS src_asn UInt32 DEFAULT 0",
-            "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS dst_asn UInt32 DEFAULT 0",
-            "ALTER TABLE network_flows_v4 ADD COLUMN IF NOT EXISTS direction UInt8 DEFAULT 255",
-            "ALTER TABLE network_flows_v6 ADD COLUMN IF NOT EXISTS direction UInt8 DEFAULT 255",
-        ];
-        for sql in &alters {
-            self.client.query(sql).execute().await?;
-        }
 
         // Apply or update TTL for existing installations
         let ttl_alters = [
@@ -274,10 +229,6 @@ impl ClickhouseExporter {
         v4_batch: &[NetworkFlowV4Row],
         v6_batch: &[NetworkFlowV6Row],
     ) -> Result<()> {
-        if self.is_legacy_schema() {
-            return self.insert_batch_legacy(v4_batch, v6_batch).await;
-        }
-
         if !v4_batch.is_empty() {
             let mut insert = self.client.insert("network_flows_v4")?;
             for row in v4_batch {
@@ -290,64 +241,6 @@ impl ClickhouseExporter {
             let mut insert = self.client.insert("network_flows_v6")?;
             for row in v6_batch {
                 insert.write(row).await?;
-            }
-            insert.end().await?;
-        }
-
-        Ok(())
-    }
-
-    /// Insert path for the legacy String schema: converts IPs to strings.
-    /// The allocation cost only exists until the operator runs the migration.
-    async fn insert_batch_legacy(
-        &self,
-        v4_batch: &[NetworkFlowV4Row],
-        v6_batch: &[NetworkFlowV6Row],
-    ) -> Result<()> {
-        if !v4_batch.is_empty() {
-            let mut insert = self.client.insert("network_flows_v4")?;
-            for row in v4_batch {
-                insert
-                    .write(&LegacyRow {
-                        timestamp: row.timestamp,
-                        exporter_ip: std::net::Ipv4Addr::from(row.exporter_ip).to_string(),
-                        src_ip: std::net::Ipv4Addr::from(row.src_ip).to_string(),
-                        dst_ip: std::net::Ipv4Addr::from(row.dst_ip).to_string(),
-                        src_port: row.src_port,
-                        dst_port: row.dst_port,
-                        protocol: row.protocol,
-                        src_asn: row.src_asn,
-                        dst_asn: row.dst_asn,
-                        packets: row.packets,
-                        bytes: row.bytes,
-                        flow_count: row.flow_count,
-                        direction: row.direction,
-                    })
-                    .await?;
-            }
-            insert.end().await?;
-        }
-
-        if !v6_batch.is_empty() {
-            let mut insert = self.client.insert("network_flows_v6")?;
-            for row in v6_batch {
-                insert
-                    .write(&LegacyRow {
-                        timestamp: row.timestamp,
-                        exporter_ip: std::net::Ipv4Addr::from(row.exporter_ip).to_string(),
-                        src_ip: std::net::Ipv6Addr::from(row.src_ip).to_string(),
-                        dst_ip: std::net::Ipv6Addr::from(row.dst_ip).to_string(),
-                        src_port: row.src_port,
-                        dst_port: row.dst_port,
-                        protocol: row.protocol,
-                        src_asn: row.src_asn,
-                        dst_asn: row.dst_asn,
-                        packets: row.packets,
-                        bytes: row.bytes,
-                        flow_count: row.flow_count,
-                        direction: row.direction,
-                    })
-                    .await?;
             }
             insert.end().await?;
         }

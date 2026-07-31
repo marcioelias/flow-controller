@@ -44,7 +44,7 @@ pub struct ProcessInfo {
 
 #[derive(Serialize)]
 pub struct CollectorInfo {
-    pub flows_received: u64,
+    pub packets_received: u64,
     pub flows_decoded: u64,
     pub packets_dropped: u64,
     pub template_cache_size: i64,
@@ -228,7 +228,7 @@ pub async fn get_health_handler(
     };
 
     // Collector metrics
-    let flows_received = state.metrics.flows_received.get();
+    let packets_received = state.metrics.packets_received.get();
     let flows_decoded = state.metrics.flows_decoded.get();
     let packets_dropped = state.metrics.packets_dropped.get();
     let tmpl_cache_size = state.metrics.template_cache_size.get();
@@ -267,7 +267,7 @@ pub async fn get_health_handler(
             uptime_seconds: proc_uptime,
         },
         collector: CollectorInfo {
-            flows_received,
+            packets_received,
             flows_decoded,
             packets_dropped,
             template_cache_size: tmpl_cache_size,

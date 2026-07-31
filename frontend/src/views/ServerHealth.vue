@@ -37,7 +37,7 @@ interface HealthData {
     uptime_seconds: number
   }
   collector: {
-    flows_received: number
+    packets_received: number
     flows_decoded: number
     packets_dropped: number
     template_cache_size: number
@@ -308,9 +308,9 @@ onUnmounted(() => {
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div class="text-center">
             <p class="text-2xl font-bold font-mono text-slate-100">
-              {{ formatNumber(data.collector.flows_received) }}
+              {{ formatNumber(data.collector.packets_received) }}
             </p>
-            <p class="text-xs text-zinc-400 mt-1">Recebidos</p>
+            <p class="text-xs text-zinc-400 mt-1">Pacotes recebidos</p>
           </div>
           <div class="text-center">
             <p class="text-2xl font-bold font-mono text-emerald-400">
