@@ -723,10 +723,17 @@ fn main() -> anyhow::Result<()> {
             // Timestamp of the window itself, not of the drain — a window may sit
             // in the queue for a while when ClickHouse is slow.
             let now = window.window_ts;
-            let map = window.map;
+            // Shared read-only: feature extraction and row building both walk it
+            let map = Arc::new(window.map);
 
-            // Extract ML features before consuming the map
-            let ml_features = features::extract(now, &map);
+            // Feature extraction is CPU-bound (two full passes over the map) —
+            // run it on the blocking pool so this task stays free to issue the
+            // ClickHouse insert instead of stalling the runtime.
+            let feat_map = Arc::clone(&map);
+            let ml_features =
+                tokio::task::spawn_blocking(move || features::extract(now, &feat_map))
+                    .await
+                    .unwrap_or_default();
             if !ml_features.is_empty() && ml_tx_ch.try_send(ml_features).is_err() {
                 exporter_metrics.ml_windows_dropped.inc();
                 if last_ml_drop_warn.elapsed() >= Duration::from_secs(10) {
@@ -739,7 +746,7 @@ fn main() -> anyhow::Result<()> {
             let mut per_device_bytes: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
 
-            for (key, metrics) in map {
+            for (key, metrics) in map.iter() {
                 batch_total_bytes += metrics.bytes;
 
                 // Aggregate bytes per exporter_ip

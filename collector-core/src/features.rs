@@ -15,16 +15,18 @@ struct IpEntry {
     tcp_bytes: u64,
     udp_bytes: u64,
     icmp_bytes: u64,
-    dst_ips: HashSet<u32>,
-    dst_ports: HashSet<u16>,
+    dst_ips: HashSet<u32, RandomState>,
+    dst_ports: HashSet<u16, RandomState>,
 }
 
 pub fn extract(
     window_ts: u32,
     map: &HashMap<AggregationKey, AggregatedMetrics, RandomState>,
 ) -> Vec<FlowFeatures> {
-    // Key: (exporter_ip_u32, src_ipv4_u32)
-    let mut per_ip: HashMap<(u32, u32), IpEntry> = HashMap::new();
+    // Key: (exporter_ip_u32, src_ipv4_u32) — ahash like the rest of the
+    // pipeline; the std default (SipHash) costs real time at 100k+ keys
+    let mut per_ip: HashMap<(u32, u32), IpEntry, RandomState> =
+        HashMap::with_hasher(RandomState::new());
 
     // Pass 1 — sender perspective (src_ip sent these bytes)
     for (key, metrics) in map.iter() {
