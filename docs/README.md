@@ -77,6 +77,14 @@ Each task file is self-contained and can be handed to an independent agent to im
 | [task-10.11](tasks/task-10.11-batch-merge.md) | Merge worker windows before inserting | 1h |
 | [task-10.12](tasks/task-10.12-native-ip-columns.md) | Native IPv4/IPv6 columns ⚠️ requires migration | 2h + migration |
 
+### Phase 11 — Traffic Direction & Mirrored Charts (requires Phase 10)
+
+| Task | Title | Effort |
+|------|-------|--------|
+| [task-11.1](tasks/task-11.1-flow-direction.md) | Flow direction through the pipeline (IE 61/10/14) | 3h |
+| [task-11.2](tasks/task-11.2-direction-stats-api.md) | Direction-aware stats API | 2h |
+| [task-11.3](tasks/task-11.3-mirrored-charts.md) | Mirrored traffic charts (frontend) | 3h |
+
 ## How to Delegate to an Agent
 
 Each task file contains:

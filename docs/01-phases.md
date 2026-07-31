@@ -289,6 +289,22 @@ parsing.
 
 ---
 
+## Phase 11 — Traffic Direction & Mirrored Charts 🔲
+**Effort:** ~1 dia  |  **Files touched:** `netflow-parser/`, `flow-types/`, `aggregator/`, `collector-core/src/`, `frontend/src/`
+
+Hoje o sistema não diferencia inbound de outbound — tudo é somado. Exporters
+configurados para exportar nos dois sentidos são **contados em dobro** sem aviso.
+Decisão (2026-07-31): direção vem do roteador (IE 61 `flowDirection`, interfaces
+IE 10/14), sem fallback por posse de IP/ASN nesta fase.
+
+| Task | Spec file | Status |
+|------|-----------|--------|
+| 11.1 Direção do flow ponta a ponta (parser → ClickHouse) | `tasks/task-11.1-flow-direction.md` | 🔲 |
+| 11.2 Stats API com séries por direção (`sumIf`) | `tasks/task-11.2-direction-stats-api.md` | 🔲 |
+| 11.3 Gráficos espelhados (in acima, out abaixo) | `tasks/task-11.3-mirrored-charts.md` | 🔲 |
+
+---
+
 ## Dependency Graph
 
 ```
@@ -320,13 +336,18 @@ Phase 1 (fixes)
     │         9.2 → 9.3 (optional: LLM explain)
     │         9.2 + 9.3 → 9.4 (frontend)
     │
-    └──► Phase 10 (perf & robustness) — requires Phase 9
-              10.1 → 10.11        (window_ts é pré-requisito do merge)
-              10.2 → 10.3         (contadores antes do retry)
-              10.4, 10.5, 10.6, 10.8, 10.9 — independentes
-              10.7 — independente, mas medir depois de 10.6
-              10.10 — independente, maior escopo
-              10.12 — por último, requer migração
+    ├──► Phase 10 (perf & robustness) — requires Phase 9
+    │         10.1 → 10.11        (window_ts é pré-requisito do merge)
+    │         10.2 → 10.3         (contadores antes do retry)
+    │         10.4, 10.5, 10.6, 10.8, 10.9 — independentes
+    │         10.7 — independente, mas medir depois de 10.6
+    │         10.10 — independente, maior escopo
+    │         10.12 — por último, requer migração
+    │
+    └──► Phase 11 (direção in/out) — requires Phase 10
+              11.1 → 11.2 → 11.3
+              (11.1 muda AggregationKey e schema; fazer após 10.12
+               para aproveitar a mesma janela de migração)
 ```
 
 ## Agent Assignment
