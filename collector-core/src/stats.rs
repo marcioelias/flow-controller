@@ -116,6 +116,9 @@ pub struct TopTalkerRow {
     pub total_bytes: u64,
     pub total_packets: u64,
     pub flow_count: u64,
+    pub in_bytes: u64,
+    pub out_bytes: u64,
+    pub unknown_bytes: u64,
 }
 
 pub async fn get_top_talkers_handler(
@@ -126,13 +129,16 @@ pub async fn get_top_talkers_handler(
     let limit = params.limit.unwrap_or(20).min(100);
     let wc = where_clause(params.exporter_ip.as_deref(), minutes, "MINUTE");
 
+    let cols = "sum(bytes) AS total_bytes, sum(packets) AS total_packets, \
+                sum(flow_count) AS flow_count, \
+                sumIf(bytes, direction = 0) AS in_bytes, \
+                sumIf(bytes, direction = 1) AS out_bytes, \
+                sumIf(bytes, direction = 255) AS unknown_bytes";
     let sql = format!(
-        "SELECT src_ip, sum(bytes) AS total_bytes, sum(packets) AS total_packets, \
-                sum(flow_count) AS flow_count \
+        "SELECT src_ip, {cols} \
          FROM network_flows_v4 {wc} GROUP BY src_ip ORDER BY total_bytes DESC LIMIT {limit} \
          UNION ALL \
-         SELECT src_ip, sum(bytes) AS total_bytes, sum(packets) AS total_packets, \
-                sum(flow_count) AS flow_count \
+         SELECT src_ip, {cols} \
          FROM network_flows_v6 {wc} GROUP BY src_ip ORDER BY total_bytes DESC LIMIT {limit} \
          FORMAT JSON"
     );
@@ -150,6 +156,9 @@ struct TopTalkerRowRaw {
     total_bytes: StringOrU64,
     total_packets: StringOrU64,
     flow_count: StringOrU64,
+    in_bytes: StringOrU64,
+    out_bytes: StringOrU64,
+    unknown_bytes: StringOrU64,
 }
 
 impl From<TopTalkerRowRaw> for TopTalkerRow {
@@ -159,6 +168,9 @@ impl From<TopTalkerRowRaw> for TopTalkerRow {
             total_bytes: r.total_bytes.into(),
             total_packets: r.total_packets.into(),
             flow_count: r.flow_count.into(),
+            in_bytes: r.in_bytes.into(),
+            out_bytes: r.out_bytes.into(),
+            unknown_bytes: r.unknown_bytes.into(),
         }
     }
 }
@@ -236,7 +248,7 @@ fn build_asn_query(
     limit: u32,
     direction: &str,
 ) -> String {
-    let time_filter = match exporter_ip {
+    let time_filter = match safe_ip(exporter_ip) {
         Some(ip) => format!(
             "WHERE exporter_ip = '{}' AND timestamp >= now() - INTERVAL {} MINUTE",
             ip, minutes
@@ -376,8 +388,18 @@ pub struct TimelineQuery {
 #[derive(Debug, Serialize)]
 pub struct TimelinePoint {
     pub minute: u64,
+    /// in + out + unknown (kept for backward compatibility)
     pub total_bytes: u64,
     pub total_packets: u64,
+    /// direction = 0 (ingress) — router perspective, IE 61
+    pub in_bytes: u64,
+    pub in_packets: u64,
+    /// direction = 1 (egress)
+    pub out_bytes: u64,
+    pub out_packets: u64,
+    /// direction = 255 (exporter does not report IE 61)
+    pub unknown_bytes: u64,
+    pub unknown_packets: u64,
 }
 
 pub async fn get_timeline_handler(
@@ -387,35 +409,48 @@ pub async fn get_timeline_handler(
     let hours = params.hours.unwrap_or(1).min(24);
     let wc = where_clause(params.exporter_ip.as_deref(), hours, "HOUR");
 
+    // Single pass per table: sumIf splits by direction without extra scans
+    let dir_cols = "sumIf(bytes, direction = 0) AS in_bytes, \
+                sumIf(packets, direction = 0) AS in_packets, \
+                sumIf(bytes, direction = 1) AS out_bytes, \
+                sumIf(packets, direction = 1) AS out_packets, \
+                sumIf(bytes, direction = 255) AS unknown_bytes, \
+                sumIf(packets, direction = 255) AS unknown_packets";
     let sql = format!(
-        "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, \
-                sum(bytes) AS total_bytes, sum(packets) AS total_packets \
+        "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, {dir_cols} \
          FROM network_flows_v4 {wc} GROUP BY minute ORDER BY minute ASC \
          UNION ALL \
-         SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, \
-                sum(bytes) AS total_bytes, sum(packets) AS total_packets \
+         SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, {dir_cols} \
          FROM network_flows_v6 {wc} GROUP BY minute ORDER BY minute ASC \
          FORMAT JSON"
     );
 
     let val = ch_query(&sql).await?;
-    let mut map: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+    let mut map: BTreeMap<u64, [u64; 6]> = BTreeMap::new();
 
     for row in val["data"].as_array().cloned().unwrap_or_default() {
         let minute = parse_u64_field(&row["minute"]);
-        let bytes = parse_u64_field(&row["total_bytes"]);
-        let pkts = parse_u64_field(&row["total_packets"]);
-        let e = map.entry(minute).or_insert((0, 0));
-        e.0 += bytes;
-        e.1 += pkts;
+        let e = map.entry(minute).or_insert([0; 6]);
+        e[0] += parse_u64_field(&row["in_bytes"]);
+        e[1] += parse_u64_field(&row["in_packets"]);
+        e[2] += parse_u64_field(&row["out_bytes"]);
+        e[3] += parse_u64_field(&row["out_packets"]);
+        e[4] += parse_u64_field(&row["unknown_bytes"]);
+        e[5] += parse_u64_field(&row["unknown_packets"]);
     }
 
     let points = map
         .into_iter()
-        .map(|(minute, (bytes, pkts))| TimelinePoint {
+        .map(|(minute, d)| TimelinePoint {
             minute,
-            total_bytes: bytes,
-            total_packets: pkts,
+            total_bytes: d[0] + d[2] + d[4],
+            total_packets: d[1] + d[3] + d[5],
+            in_bytes: d[0],
+            in_packets: d[1],
+            out_bytes: d[2],
+            out_packets: d[3],
+            unknown_bytes: d[4],
+            unknown_packets: d[5],
         })
         .collect();
 
@@ -435,6 +470,11 @@ pub struct ExporterSummaryRow {
     pub total_bytes: u64,
     pub flow_count: u64,
     pub unique_sources: u64,
+    pub in_bytes: u64,
+    pub out_bytes: u64,
+    pub unknown_bytes: u64,
+    /// "in+out" | "in" | "out" | "none" — whether the exporter reports IE 61
+    pub direction_mode: String,
 }
 
 pub async fn get_exporter_summary_handler(
@@ -444,13 +484,16 @@ pub async fn get_exporter_summary_handler(
     let minutes = params.minutes.unwrap_or(5).min(1440);
     let time_filter = format!("WHERE timestamp >= now() - INTERVAL {} MINUTE", minutes);
 
+    let cols = "sum(bytes) AS total_bytes, sum(flow_count) AS flow_count, \
+                uniq(src_ip) AS unique_sources, \
+                sumIf(bytes, direction = 0) AS in_bytes, \
+                sumIf(bytes, direction = 1) AS out_bytes, \
+                sumIf(bytes, direction = 255) AS unknown_bytes";
     let sql = format!(
-        "SELECT exporter_ip, sum(bytes) AS total_bytes, sum(flow_count) AS flow_count, \
-                uniq(src_ip) AS unique_sources \
+        "SELECT exporter_ip, {cols} \
          FROM network_flows_v4 {time_filter} GROUP BY exporter_ip ORDER BY total_bytes DESC \
          UNION ALL \
-         SELECT exporter_ip, sum(bytes) AS total_bytes, sum(flow_count) AS flow_count, \
-                uniq(src_ip) AS unique_sources \
+         SELECT exporter_ip, {cols} \
          FROM network_flows_v6 {time_filter} GROUP BY exporter_ip ORDER BY total_bytes DESC \
          FORMAT JSON"
     );
@@ -463,27 +506,51 @@ pub async fn get_exporter_summary_handler(
         let bytes = parse_u64_field(&row["total_bytes"]);
         let flows = parse_u64_field(&row["flow_count"]);
         let uniq = parse_u64_field(&row["unique_sources"]);
+        let in_b = parse_u64_field(&row["in_bytes"]);
+        let out_b = parse_u64_field(&row["out_bytes"]);
+        let unk_b = parse_u64_field(&row["unknown_bytes"]);
 
         let e = merged.entry(ip.clone()).or_insert(ExporterSummaryRow {
             exporter_ip: ip,
             total_bytes: 0,
             flow_count: 0,
             unique_sources: 0,
+            in_bytes: 0,
+            out_bytes: 0,
+            unknown_bytes: 0,
+            direction_mode: String::new(),
         });
         e.total_bytes += bytes;
         e.flow_count += flows;
         e.unique_sources += uniq;
+        e.in_bytes += in_b;
+        e.out_bytes += out_b;
+        e.unknown_bytes += unk_b;
     }
 
     let mut rows: Vec<ExporterSummaryRow> = merged.into_values().collect();
+    for r in rows.iter_mut() {
+        r.direction_mode = match (r.in_bytes > 0, r.out_bytes > 0) {
+            (true, true) => "in+out",
+            (true, false) => "in",
+            (false, true) => "out",
+            (false, false) => "none",
+        }
+        .to_string();
+    }
     rows.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
     Ok(Json(rows))
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+/// Only a syntactically valid IP may be interpolated into SQL
+fn safe_ip(ip: Option<&str>) -> Option<&str> {
+    ip.filter(|s| s.parse::<std::net::IpAddr>().is_ok())
+}
+
 fn where_clause(exporter_ip: Option<&str>, window: u32, unit: &str) -> String {
-    match exporter_ip {
+    match safe_ip(exporter_ip) {
         Some(ip) => format!(
             "WHERE exporter_ip = '{}' AND timestamp >= now() - INTERVAL {} {}",
             ip, window, unit
