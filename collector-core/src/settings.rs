@@ -40,6 +40,7 @@ const KNOWN_KEYS: &[&str] = &[
     "SESSION_TIMEOUT_HOURS",
     // Coletor
     "COLLECTOR_WORKERS",
+    "COLLECTOR_RECEIVERS",
     // IA
     "LLM_ENABLED",
     "LLM_ENDPOINT",
@@ -155,6 +156,14 @@ pub async fn init_settings_table(pool: &SqlitePool) -> anyhow::Result<()> {
             "Número de threads de parsing/agregação de flows. \
              Cada worker processa os pacotes de um subconjunto de exporters (hash do IP). \
              Recomendado: metade dos núcleos físicos disponíveis. Requer reinício do serviço.",
+            "Coletor",
+        ),
+        (
+            "COLLECTOR_RECEIVERS",
+            "",
+            "Threads de Recepção UDP",
+            "Número de sockets/threads recebendo NetFlow na porta 2055 (SO_REUSEPORT). \
+             Vazio = automático (mín entre workers e 4). Requer reinício do serviço.",
             "Coletor",
         ),
         // ── IA / ML ──────────────────────────────────────────────────────

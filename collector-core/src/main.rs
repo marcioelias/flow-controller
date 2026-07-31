@@ -829,22 +829,62 @@ fn main() -> anyhow::Result<()> {
         worker_threads.push(handle);
     }
 
-    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-    socket.set_reuse_address(true)?;
-
-    if let Err(e) = socket.set_recv_buffer_size(32 * 1024 * 1024) {
-        tracing::warn!("Could not set optimal UDP recv buffer size: {}", e);
-    }
-
-    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 2055);
-    socket.bind(&addr.into())?;
-    let udp_socket: UdpSocket = socket.into();
+    // Receiver threads: N sockets bound to the same port via SO_REUSEPORT,
+    // kernel load-balances datagrams across them by flow hash.
+    let receiver_count: usize = rt
+        .block_on(settings::get_value(&auth_db, "COLLECTOR_RECEIVERS"))
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| worker_count.min(4))
+        .clamp(1, 16);
 
     tracing::info!(
-        "Listening for NetFlow/IPFIX on UDP port 2055 with {} workers",
+        "Listening for NetFlow/IPFIX on UDP port 2055 with {} receivers and {} workers",
+        receiver_count,
         worker_count
     );
 
+    let mut receiver_threads = Vec::new();
+    for receiver_id in 0..receiver_count {
+        let udp_socket = bind_receiver(2055, 32 * 1024 * 1024, receiver_count > 1)?;
+        let recv_allowed = allowed_set.clone();
+        let recv_metrics = collector_metrics.clone();
+        let recv_senders = worker_senders.clone();
+        let handle = thread::Builder::new()
+            .name(format!("receiver-{}", receiver_id))
+            .spawn(move || {
+                receiver_loop(udp_socket, recv_allowed, recv_metrics, recv_senders);
+            })?;
+        receiver_threads.push(handle);
+    }
+
+    // Receivers and workers run forever; park the main thread on them
+    for handle in receiver_threads {
+        let _ = handle.join();
+    }
+    Ok(())
+}
+
+fn bind_receiver(port: u16, recv_buf: usize, reuse_port: bool) -> anyhow::Result<UdpSocket> {
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    if reuse_port {
+        socket.set_reuse_port(true)?;
+    }
+    if let Err(e) = socket.set_recv_buffer_size(recv_buf) {
+        tracing::warn!("Could not set optimal UDP recv buffer size: {}", e);
+    }
+    let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
+    socket.bind(&addr.into())?;
+    Ok(socket.into())
+}
+
+fn receiver_loop(
+    udp_socket: UdpSocket,
+    allowed_set: AllowedSet,
+    collector_metrics: Arc<metrics::CollectorMetrics>,
+    worker_senders: Vec<Sender<PacketPayload>>,
+) {
+    let worker_count = worker_senders.len();
     let mut buf = [0u8; UDP_BUFFER_SIZE];
     loop {
         match udp_socket.recv_from(&mut buf) {
@@ -868,6 +908,10 @@ fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
+                // Shard by exporter IP: the template cache is thread-local and
+                // templates are per exporter, so all packets from one exporter
+                // must land on the same worker regardless of which receiver
+                // thread picked them up.
                 let worker_idx = match src_addr.ip() {
                     std::net::IpAddr::V4(ipv4) => {
                         (u32::from_be_bytes(ipv4.octets()) as usize) % worker_count
