@@ -106,3 +106,10 @@ ride along with the IP column migration rather than being a separate rewrite.
 - All API responses return IPs in the same string form as before
 - Existing installs are detected and warned, never silently migrated
 - Migration script is tested against a table with >100M rows
+
+## Update (2026-07-31)
+
+Não há instalação em produção — o suporte ao schema legado foi removido:
+- `LegacyRow`, detecção com fallback e `scripts/migrate-ip-columns.sh` apagados
+- Banco dev com colunas String: o coletor recusa iniciar e instrui `DROP TABLE`
+- Alias deprecated `flows_received_total` removido junto
