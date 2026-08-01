@@ -97,6 +97,10 @@ pub struct NormalizedFlow {
     /// Direction from the router's perspective (IE 61):
     /// 0 = ingress, 1 = egress, 255 = not reported
     pub direction: u8,
+    /// Real flow start in unix ms (0 = exporter did not report it)
+    pub start_ms: u64,
+    /// Real flow end in unix ms (0 = exporter did not report it)
+    pub end_ms: u64,
 }
 
 pub const DIRECTION_INGRESS: u8 = 0;

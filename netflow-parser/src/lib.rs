@@ -81,6 +81,16 @@ pub const IANA_BGP_DST_ASN: u16 = 17;
 pub const IANA_IPV6_SRC_ADDR: u16 = 27;
 pub const IANA_IPV6_DST_ADDR: u16 = 28;
 
+// Flow timestamp IEs (task 13.1)
+pub const IANA_LAST_SWITCHED: u16 = 21; // v9 — ms relative to header sysUptime
+pub const IANA_FIRST_SWITCHED: u16 = 22; // v9 — ms relative to header sysUptime
+pub const IANA_FLOW_END_SEC: u16 = 151; // IPFIX — unix seconds
+pub const IANA_FLOW_START_SEC: u16 = 150; // IPFIX — unix seconds
+pub const IANA_FLOW_END_MS: u16 = 153; // IPFIX — unix milliseconds
+pub const IANA_FLOW_START_MS: u16 = 152; // IPFIX — unix milliseconds
+pub const IANA_FLOW_START_US: u16 = 154; // IPFIX — NTP 64-bit (RFC 7011 §6.1.10)
+pub const IANA_FLOW_END_US: u16 = 155; // IPFIX — NTP 64-bit
+
 // Sampling-related IEs carried in options data records
 pub const IANA_SAMPLING_INTERVAL: u16 = 34; // v9 classic
 pub const IANA_SAMPLER_RANDOM_INTERVAL: u16 = 50; // v9 random sampler
@@ -326,6 +336,41 @@ fn parse_options_data_set(set_data: &[u8], template: &template_cache::Template) 
     learned
 }
 
+/// Header clock context needed to resolve flow timestamps.
+/// v9 reports FIRST/LAST_SWITCHED relative to the exporter's sysUptime;
+/// IPFIX reports absolute time. Both need the export moment as anchor.
+#[derive(Clone, Copy)]
+pub struct TimeCtx {
+    /// Export moment in unix ms (header unix_secs / export_time)
+    pub export_ms: u64,
+    /// Header sysUptime in ms — Some only for NetFlow v9
+    pub uptime_ms: Option<u32>,
+}
+
+/// Seconds between the NTP epoch (1900) and the unix epoch (1970)
+const NTP_UNIX_OFFSET_SECS: u64 = 2_208_988_800;
+
+/// Convert a v9 sysUptime-relative value to unix ms, robust to the 32-bit
+/// uptime wrap (~49.7 days): the age is computed with wrapping arithmetic.
+#[inline]
+fn v9_uptime_to_unix_ms(raw_ms: u64, ctx: &TimeCtx) -> u64 {
+    match ctx.uptime_ms {
+        Some(uptime) => {
+            let age_ms = uptime.wrapping_sub(raw_ms as u32) as u64;
+            ctx.export_ms.saturating_sub(age_ms)
+        }
+        None => 0,
+    }
+}
+
+/// Convert an RFC 7011 dateTimeMicroseconds (64-bit NTP) value to unix ms
+#[inline]
+fn ntp64_to_unix_ms(raw: u64) -> u64 {
+    let secs = (raw >> 32).saturating_sub(NTP_UNIX_OFFSET_SECS);
+    let frac_ms = ((raw & 0xFFFF_FFFF) * 1000) >> 32;
+    secs * 1000 + frac_ms
+}
+
 #[inline]
 fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFlow {
     NormalizedFlow {
@@ -345,13 +390,23 @@ fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFl
         tcp_flags: 0,
         sampling_rate: 1,
         direction: flow_types::DIRECTION_UNKNOWN,
+        start_ms: 0,
+        end_ms: 0,
     }
 }
 
 #[inline]
-fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8]) {
+fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8], time: &TimeCtx) {
     let f_len = field_data.len();
     match field_type {
+        IANA_FIRST_SWITCHED => flow.start_ms = v9_uptime_to_unix_ms(read_uint(field_data), time),
+        IANA_LAST_SWITCHED => flow.end_ms = v9_uptime_to_unix_ms(read_uint(field_data), time),
+        IANA_FLOW_START_SEC => flow.start_ms = read_uint(field_data) * 1000,
+        IANA_FLOW_END_SEC => flow.end_ms = read_uint(field_data) * 1000,
+        IANA_FLOW_START_MS => flow.start_ms = read_uint(field_data),
+        IANA_FLOW_END_MS => flow.end_ms = read_uint(field_data),
+        IANA_FLOW_START_US => flow.start_ms = ntp64_to_unix_ms(read_uint(field_data)),
+        IANA_FLOW_END_US => flow.end_ms = ntp64_to_unix_ms(read_uint(field_data)),
         IANA_IN_BYTES => flow.bytes = read_uint(field_data),
         IANA_IN_PKTS => flow.packets = read_uint(field_data),
         IANA_PROTOCOL => {
@@ -415,6 +470,7 @@ fn parse_data_set(
     export_time: u32,
     exporter_ip: std::net::Ipv4Addr,
     templates: &ThreadLocalTemplateCache,
+    time: &TimeCtx,
 ) -> Vec<NormalizedFlow> {
     let key = template_cache::TemplateKey {
         exporter_ip,
@@ -431,7 +487,14 @@ fn parse_data_set(
     let sampling_rate = templates.sampling_rate(exporter_ip, source_id);
 
     if template.fields.iter().any(|f| f.length == VARLEN) {
-        return parse_varlen_records(set_data, template, export_time, exporter_ip, sampling_rate);
+        return parse_varlen_records(
+            set_data,
+            template,
+            export_time,
+            exporter_ip,
+            sampling_rate,
+            time,
+        );
     }
 
     let record_size: usize = template.fields.iter().map(|f| f.length as usize).sum();
@@ -451,7 +514,12 @@ fn parse_data_set(
             if f_ptr + f_len > set_data.len() {
                 break;
             }
-            decode_field(&mut flow, field.field_type, &set_data[f_ptr..f_ptr + f_len]);
+            decode_field(
+                &mut flow,
+                field.field_type,
+                &set_data[f_ptr..f_ptr + f_len],
+                time,
+            );
             f_ptr += f_len;
         }
 
@@ -483,6 +551,7 @@ fn parse_varlen_records(
     export_time: u32,
     exporter_ip: std::net::Ipv4Addr,
     sampling_rate: u32,
+    time: &TimeCtx,
 ) -> Vec<NormalizedFlow> {
     // Smallest possible record: fixed lengths + 1 prefix byte per varlen field.
     // Anything shorter at the tail is set padding, not a record.
@@ -532,7 +601,12 @@ fn parse_varlen_records(
             if f_ptr + f_len > set_data.len() {
                 break 'records;
             }
-            decode_field(&mut flow, field.field_type, &set_data[f_ptr..f_ptr + f_len]);
+            decode_field(
+                &mut flow,
+                field.field_type,
+                &set_data[f_ptr..f_ptr + f_len],
+                time,
+            );
             f_ptr += f_len;
         }
 
@@ -555,6 +629,7 @@ fn handle_data_set(
     exporter_ip: std::net::Ipv4Addr,
     templates: &mut ThreadLocalTemplateCache,
     flows: &mut Vec<NormalizedFlow>,
+    time: &TimeCtx,
 ) {
     let key = template_cache::TemplateKey {
         exporter_ip,
@@ -574,6 +649,7 @@ fn handle_data_set(
                 export_time,
                 exporter_ip,
                 templates,
+                time,
             );
             flows.append(&mut data_flows);
             return;
@@ -598,6 +674,10 @@ fn parse_v9_message(
     let hdr = parse_v9_header(&mut cur)?;
 
     let ipv4_exporter = exporter_v4(exporter_ip);
+    let time = TimeCtx {
+        export_ms: hdr.unix_secs as u64 * 1000,
+        uptime_ms: Some(hdr.sys_uptime),
+    };
     let mut flows = Vec::with_capacity(32);
     let mut ptr = 20usize; // v9 header is 20 bytes
 
@@ -642,6 +722,7 @@ fn parse_v9_message(
                     ipv4_exporter,
                     templates,
                     &mut flows,
+                    &time,
                 );
             }
             _ => {}
@@ -668,6 +749,10 @@ fn parse_ipfix_message(
     let hdr = parse_ipfix_header(&mut cur)?;
 
     let ipv4_exporter = exporter_v4(exporter_ip);
+    let time = TimeCtx {
+        export_ms: hdr.export_time as u64 * 1000,
+        uptime_ms: None,
+    };
     let mut flows = Vec::with_capacity(32);
     let mut ptr = 16usize; // IPFIX header is 16 bytes
 
@@ -715,6 +800,7 @@ fn parse_ipfix_message(
                     ipv4_exporter,
                     templates,
                     &mut flows,
+                    &time,
                 );
             }
             _ => {}
@@ -1183,5 +1269,120 @@ mod tests {
         let pkt = [0x00, 0x05u8, 0, 0, 0, 0]; // version 5
         let result = parse_packet(&pkt, &mut cache, exporter);
         assert!(matches!(result, Err(ParseError::UnsupportedVersion(5))));
+    }
+
+    // Builds a v9 packet whose template carries FIRST/LAST_SWITCHED
+    fn build_v9_switched_packet(sys_uptime: u32, first: u32, last: u32) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&9u16.to_be_bytes());
+        pkt.extend_from_slice(&2u16.to_be_bytes());
+        pkt.extend_from_slice(&sys_uptime.to_be_bytes());
+        pkt.extend_from_slice(&1_700_000_000u32.to_be_bytes());
+        pkt.extend_from_slice(&1u32.to_be_bytes());
+        pkt.extend_from_slice(&100u32.to_be_bytes());
+
+        let fields: &[(u16, u16)] = &[
+            (IANA_FIRST_SWITCHED, 4),
+            (IANA_LAST_SWITCHED, 4),
+            (IANA_IN_BYTES, 8),
+        ];
+        let template_id: u16 = 320;
+        let fs_len = 4 + 4 + fields.len() * 4;
+        pkt.extend_from_slice(&0u16.to_be_bytes());
+        pkt.extend_from_slice(&(fs_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+        for (ft, fl) in fields {
+            pkt.extend_from_slice(&ft.to_be_bytes());
+            pkt.extend_from_slice(&fl.to_be_bytes());
+        }
+
+        let data_len = 4 + 4 + 4 + 8;
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(data_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&first.to_be_bytes());
+        pkt.extend_from_slice(&last.to_be_bytes());
+        pkt.extend_from_slice(&1234u64.to_be_bytes());
+        pkt
+    }
+
+    #[test]
+    fn test_v9_first_last_switched() {
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        // uptime 100s; flow ran from uptime 40s to 90s
+        let pkt = build_v9_switched_packet(100_000, 40_000, 90_000);
+        let flows = parse_packet(&pkt, &mut cache, exporter).unwrap();
+        assert_eq!(flows.len(), 1);
+        let export_ms = 1_700_000_000u64 * 1000;
+        assert_eq!(flows[0].start_ms, export_ms - 60_000);
+        assert_eq!(flows[0].end_ms, export_ms - 10_000);
+    }
+
+    #[test]
+    fn test_v9_switched_uptime_wrap() {
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        // uptime wrapped: header says 5000ms, flow started 4096ms before the wrap
+        let pkt = build_v9_switched_packet(5_000, 0xFFFF_F000, 2_000);
+        let flows = parse_packet(&pkt, &mut cache, exporter).unwrap();
+        let export_ms = 1_700_000_000u64 * 1000;
+        // age = 5000 - (-4096) = 9096ms
+        assert_eq!(flows[0].start_ms, export_ms - 9_096);
+        assert_eq!(flows[0].end_ms, export_ms - 3_000);
+    }
+
+    #[test]
+    fn test_ipfix_flow_millis() {
+        let mut pkt = Vec::new();
+        let template_id: u16 = 420;
+        let fields: &[(u16, u16)] = &[
+            (IANA_FLOW_START_MS, 8),
+            (IANA_FLOW_END_MS, 8),
+            (IANA_IN_BYTES, 8),
+        ];
+        let tmpl_set_len = 4 + 4 + fields.len() * 4;
+        let data_set_len = 4 + 24;
+        let total_len = 16 + tmpl_set_len + data_set_len;
+
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&(total_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&1_700_000_000u32.to_be_bytes());
+        pkt.extend_from_slice(&1u32.to_be_bytes());
+        pkt.extend_from_slice(&100u32.to_be_bytes());
+
+        pkt.extend_from_slice(&2u16.to_be_bytes());
+        pkt.extend_from_slice(&(tmpl_set_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+        for (ft, fl) in fields {
+            pkt.extend_from_slice(&ft.to_be_bytes());
+            pkt.extend_from_slice(&fl.to_be_bytes());
+        }
+
+        let start: u64 = 1_699_999_980_500;
+        let end: u64 = 1_699_999_995_250;
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(data_set_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&start.to_be_bytes());
+        pkt.extend_from_slice(&end.to_be_bytes());
+        pkt.extend_from_slice(&4096u64.to_be_bytes());
+
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2));
+        let flows = parse_packet(&pkt, &mut cache, exporter).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].start_ms, start);
+        assert_eq!(flows[0].end_ms, end);
+    }
+
+    #[test]
+    fn test_flow_without_timestamps_stays_zero() {
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        let pkt = build_v9_packet([192, 168, 1, 10], [8, 8, 8, 8], 4096, 32);
+        let flows = parse_packet(&pkt, &mut cache, exporter).unwrap();
+        assert_eq!(flows[0].start_ms, 0);
+        assert_eq!(flows[0].end_ms, 0);
     }
 }
