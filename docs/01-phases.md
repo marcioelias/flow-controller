@@ -341,6 +341,7 @@ tráfego como ele realmente aconteceu.
 | 13.7 Banda por versão de IP (v4 × v6) | `tasks/task-13.7-ip-family-chart.md` | ✅ (superseded por 13.9) |
 | 13.8 Timestamps IPFIX relativos (IE 21/22 + IE 160) | `tasks/task-13.8-ipfix-sysuptime.md` | ✅ |
 | 13.9 Espelho empilhado por família + stats 95% | `tasks/task-13.9-stacked-family.md` | ✅ |
+| 13.10 Janela ao vivo persistente entre views | `tasks/task-13.10-live-persistence.md` | ✅ |
 
 Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 

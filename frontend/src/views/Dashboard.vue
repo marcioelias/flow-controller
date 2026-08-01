@@ -13,6 +13,7 @@ import {
   Gauge, Zap, Users, Bell, Radio, Flame,
 } from 'lucide-vue-next'
 import { formatBytes } from '../utils/format'
+import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from '../composables/useLiveTraffic'
 import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, type FamFilter } from '../lib/chartTheme'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler)
@@ -55,21 +56,11 @@ const liveTotalBps = ref(0)
 // Buckets por segundo epoch (janela de 5 min). Fatias do WS somam no segundo
 // a que pertencem — inclusive retroativamente, conforme flows expiram no
 // exporter. Taxa real, não arrival (task 13.6).
-const LIVE_WINDOW_SECS = 300
-const liveBuckets = new Map<number, { v4i: number; v4o: number; v6i: number; v6o: number }>()
+// Janela global vive no composable — sobrevive à troca de views (task 13.10).
+// O modo por dispositivo é a exceção: buffer local, reinicia ao navegar.
+const { buckets: liveBuckets, subscribe } = useLiveTraffic()
+const deviceBuckets = new Map<number, LiveBucket>()
 const famFilter = ref<FamFilter>('all')
-
-function bucketAdd(sec: number, v4i: number, v4o: number, v6i: number, v6o: number) {
-  const b = liveBuckets.get(sec)
-  if (b) {
-    b.v4i += v4i
-    b.v4o += v4o
-    b.v6i += v6i
-    b.v6o += v6o
-  } else {
-    liveBuckets.set(sec, { v4i, v4o, v6i, v6o })
-  }
-}
 
 const lineChartData = ref<any>({ labels: [], datasets: [] })
 const liveStatsIn = ref({ min: 0, max: 0, avg: 0, p95: 0 })
@@ -141,8 +132,9 @@ function exporterName(ip: string) {
 
 function selectDevice(ip: string | null) {
   selectedDevice.value = ip
-  liveBuckets.clear()
+  deviceBuckets.clear()
   if (ip) famFilter.value = 'v4' // slots v4 = par único quando filtrado por device
+  else famFilter.value = 'all'
   loadProtocolStats()
 }
 
@@ -254,9 +246,8 @@ function updateChart() {
   const nowSec = Math.floor(Date.now() / 1000)
   const first = nowSec - LIVE_WINDOW_SECS
 
-  for (const sec of liveBuckets.keys()) {
-    if (sec < first) liveBuckets.delete(sec)
-  }
+  const src = selectedDevice.value ? deviceBuckets : liveBuckets
+  pruneBuckets(src)
 
   const mbps = (bytes: number) => (bytes * 8) / 1_000_000
   const labels: string[] = []
@@ -269,7 +260,7 @@ function updateChart() {
   let recent = 0
   for (let sec = first; sec < nowSec; sec++) {
     labels.push(new Date(sec * 1000).toTimeString().slice(0, 8))
-    const b = liveBuckets.get(sec) ?? { v4i: 0, v4o: 0, v6i: 0, v6o: 0 }
+    const b = src.get(sec) ?? { v4i: 0, v4o: 0, v6i: 0, v6o: 0 }
     v4in.push(mbps(b.v4i))
     v6in.push(mbps(b.v6i))
     v4out.push(mbps(b.v4o))
@@ -293,37 +284,25 @@ function updateChart() {
   }
 }
 
-let ws: WebSocket | null = null
+let unsubscribeLive: (() => void) | null = null
 let chartTimer: any = null
 let pollTimer: any = null
 let overviewTimer: any = null
 
-function connectWs() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  ws = new WebSocket(`${proto}//${location.host}/ws`)
-
-  ws.onmessage = (e) => {
-    try {
-      const stats = JSON.parse(e.data)
-      if (!stats.timestamp_sec) return
-      if (selectedDevice.value) {
-        // Fatias são globais; com filtro de dispositivo o gráfico volta a ser
-        // arrival-based e sem split de família (slots v4 = par único in/out)
-        bucketAdd(
-          stats.timestamp_sec,
-          stats.per_device_in?.[selectedDevice.value] ?? 0,
-          stats.per_device_out?.[selectedDevice.value] ?? 0,
-          0,
-          0,
-        )
-      } else if (Array.isArray(stats.slices)) {
-        for (const sl of stats.slices) {
-          bucketAdd(sl.sec, sl.v4_in ?? 0, sl.v4_out ?? 0, sl.v6_in ?? 0, sl.v6_out ?? 0)
-        }
-      }
-    } catch {}
+function onLiveMessage(stats: any) {
+  if (!selectedDevice.value) return
+  // Fatias são globais; por dispositivo o payload é agregado (arrival-based,
+  // sem split de família) — slots v4 funcionam como par único in/out
+  const sec = stats.timestamp_sec
+  const inB = stats.per_device_in?.[selectedDevice.value] ?? 0
+  const outB = stats.per_device_out?.[selectedDevice.value] ?? 0
+  const b = deviceBuckets.get(sec)
+  if (b) {
+    b.v4i += inB
+    b.v4o += outB
+  } else {
+    deviceBuckets.set(sec, { v4i: inB, v4o: outB, v6i: 0, v6o: 0 })
   }
-  ws.onclose = () => setTimeout(connectWs, 3000)
 }
 
 const visible = () => document.visibilityState === 'visible'
@@ -336,7 +315,8 @@ onMounted(() => {
   loadTopTalkers()
   loadRecentAlerts()
   loadHeatmap()
-  connectWs()
+  unsubscribeLive = subscribe(onLiveMessage)
+  updateChart() // janela restaurada aparece já no primeiro paint
   overviewTimer = setInterval(() => { if (visible()) { loadOverview(); loadTopTalkers(); loadRecentAlerts() } }, 10_000)
   pollTimer = setInterval(() => { if (visible()) { loadExporters(); loadProtocolStats(); loadExporterStats(); loadHeatmap() } }, 60_000)
   chartTimer = setInterval(updateChart, 1000)
@@ -346,7 +326,7 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (overviewTimer) clearInterval(overviewTimer)
   if (chartTimer) clearInterval(chartTimer)
-  if (ws) ws.close()
+  if (unsubscribeLive) unsubscribeLive()
 })
 </script>
 
