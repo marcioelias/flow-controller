@@ -1,0 +1,14 @@
+# Nunca entram no build context da imagem
+license-gen/
+*.key
+*.key.backup
+auth.db
+
+# Inúteis no build — só inflam o context
+target/
+frontend/node_modules/
+frontend/dist/
+.git/
+.claude/
+docs/
+*.md

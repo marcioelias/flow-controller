@@ -1,4 +1,6 @@
 [workspace]
+# license-gen fica fora do workspace (e do git) — roda com --manifest-path
+exclude = ["license-gen"]
 members = [
     "collector-core",
     "netflow-parser",
