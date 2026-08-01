@@ -34,13 +34,15 @@ export function seriesStats(values: number[]): SeriesStats {
   }
 }
 
-/** Datasets do espelho empilhado por família (entrada +, saída −) */
+/** Datasets do espelho empilhado por família (entrada +, saída −).
+ *  `flip` inverte os lados — preferência de operador (⇅). */
 export function stackedMirrorDatasets(
   fam: FamFilter,
   v4in: number[],
   v6in: number[],
   v4out: number[],
   v6out: number[],
+  flip = false,
 ) {
   const area = (label: string, color: string, data: number[], stack: string, first: boolean) => ({
     label,
@@ -54,24 +56,34 @@ export function stackedMirrorDatasets(
     pointRadius: 0,
     pointHoverRadius: 4,
   })
+  const up = (d: number[]) => (flip ? d.map((v) => -v) : d)
+  const down = (d: number[]) => (flip ? d : d.map((v) => -v))
   if (fam === 'v4') {
     return [
-      area('Entrada', COLOR_IN, v4in, 'in', true),
-      area('Saída', COLOR_OUT, v4out.map((v) => -v), 'out', true),
+      area('Entrada', COLOR_IN, up(v4in), 'in', true),
+      area('Saída', COLOR_OUT, down(v4out), 'out', true),
     ]
   }
   if (fam === 'v6') {
     return [
-      area('Entrada', COLOR_IN, v6in, 'in', true),
-      area('Saída', COLOR_OUT, v6out.map((v) => -v), 'out', true),
+      area('Entrada', COLOR_IN, up(v6in), 'in', true),
+      area('Saída', COLOR_OUT, down(v6out), 'out', true),
     ]
   }
   return [
-    area('IPv4 In', COLOR_V4_IN, v4in, 'in', true),
-    area('IPv6 In', COLOR_V6_IN, v6in, 'in', false),
-    area('IPv4 Out', COLOR_V4_OUT, v4out.map((v) => -v), 'out', true),
-    area('IPv6 Out', COLOR_V6_OUT, v6out.map((v) => -v), 'out', false),
+    area('IPv4 In', COLOR_V4_IN, up(v4in), 'in', true),
+    area('IPv6 In', COLOR_V6_IN, up(v6in), 'in', false),
+    area('IPv4 Out', COLOR_V4_OUT, down(v4out), 'out', true),
+    area('IPv6 Out', COLOR_V6_OUT, down(v6out), 'out', false),
   ]
+}
+
+const FLIP_KEY = 'fv-mirror-flip'
+export function loadMirrorFlip(): boolean {
+  return localStorage.getItem(FLIP_KEY) === '1'
+}
+export function saveMirrorFlip(v: boolean) {
+  localStorage.setItem(FLIP_KEY, v ? '1' : '0')
 }
 
 /** Alpha em hex de 2 dígitos (ex.: '26' ≈ 15%) sobre uma cor #rrggbb */

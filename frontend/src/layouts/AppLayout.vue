@@ -16,6 +16,19 @@ const route  = useRoute()
 const authStore = useAuthStore()
 
 const isUserMenuOpen = ref(false)
+
+// Banner de enforcement da licença (task 14.1)
+const licInfo = ref<any>(null)
+async function loadLicenseInfo() {
+  try {
+    const res = await fetch('/api/license')
+    if (res.ok) licInfo.value = await res.json()
+  } catch {}
+}
+let licTimer: ReturnType<typeof setInterval> | null = null
+function fmtMbps(bps: number): string {
+  return (bps / 1e6).toFixed(0) + ' Mbps'
+}
 const debugOpen      = ref(false)
 const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'
 const appCommit  = typeof __APP_COMMIT__  !== 'undefined' ? __APP_COMMIT__  : 'dev'
@@ -69,8 +82,15 @@ function closeUserMenu(e: MouseEvent) {
   if (!target.closest('.user-menu-container')) isUserMenuOpen.value = false
 }
 
-onMounted(()  => document.addEventListener('click', closeUserMenu))
-onUnmounted(() => document.removeEventListener('click', closeUserMenu))
+onMounted(() => {
+  document.addEventListener('click', closeUserMenu)
+  loadLicenseInfo()
+  licTimer = setInterval(loadLicenseInfo, 5 * 60_000)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', closeUserMenu)
+  if (licTimer) clearInterval(licTimer)
+})
 </script>
 
 <template>
@@ -314,6 +334,25 @@ onUnmounted(() => document.removeEventListener('click', closeUserMenu))
           </div>
         </div>
       </header>
+
+      <!-- Banner de licença (task 14.1) -->
+      <div
+        v-if="licInfo && licInfo.degraded"
+        class="px-6 py-2 text-sm bg-red-500/10 border-b border-red-500/30 text-red-400 flex items-center gap-2"
+      >
+        <span class="font-semibold">Licença:</span>
+        tráfego acima do limite há mais de 7 dias — views analíticas bloqueadas.
+        <router-link to="/license" class="underline hover:text-red-300">Aplicar licença</router-link>
+      </div>
+      <div
+        v-else-if="licInfo && licInfo.over_limit"
+        class="px-6 py-2 text-sm bg-amber-500/10 border-b border-amber-500/30 text-amber-400 flex items-center gap-2"
+      >
+        <span class="font-semibold">Licença:</span>
+        tráfego atual {{ fmtMbps(licInfo.current_bps) }} acima do limite de
+        {{ fmtMbps(licInfo.max_bps) }} — a coleta continua completa; analíticos serão
+        limitados após 7 dias de excedente.
+      </div>
 
       <!-- Page Content -->
       <main class="flex-1 overflow-y-auto relative bg-zinc-950">

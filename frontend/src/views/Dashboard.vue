@@ -14,7 +14,8 @@ import {
 } from 'lucide-vue-next'
 import { formatBytes } from '../utils/format'
 import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from '../composables/useLiveTraffic'
-import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, type FamFilter } from '../lib/chartTheme'
+import { ArrowUpDown } from 'lucide-vue-next'
+import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, loadMirrorFlip, saveMirrorFlip, type FamFilter } from '../lib/chartTheme'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler)
 
@@ -61,6 +62,14 @@ const liveTotalBps = ref(0)
 const { buckets: liveBuckets, subscribe } = useLiveTraffic()
 const deviceBuckets = new Map<number, LiveBucket>()
 const famFilter = ref<FamFilter>('all')
+const mirrorFlip = ref(loadMirrorFlip())
+function toggleFlip() {
+  mirrorFlip.value = !mirrorFlip.value
+  saveMirrorFlip(mirrorFlip.value)
+}
+// Os últimos segundos ainda não têm flow expirado — cortar o rabo evita o
+// mergulho falso a zero na borda direita (padrão NOC: plot atrasado)
+const LIVE_DELAY_SECS = 10
 
 const lineChartData = ref<any>({ labels: [], datasets: [] })
 const liveStatsIn = ref({ min: 0, max: 0, avg: 0, p95: 0 })
@@ -243,8 +252,8 @@ function formatAlertTime(ts: string) {
 }
 
 function updateChart() {
-  const nowSec = Math.floor(Date.now() / 1000)
-  const first = nowSec - LIVE_WINDOW_SECS
+  const nowSec = Math.floor(Date.now() / 1000) - LIVE_DELAY_SECS
+  const first = nowSec - (LIVE_WINDOW_SECS - LIVE_DELAY_SECS)
 
   const src = selectedDevice.value ? deviceBuckets : liveBuckets
   pruneBuckets(src)
@@ -280,7 +289,7 @@ function updateChart() {
 
   lineChartData.value = {
     labels,
-    datasets: stackedMirrorDatasets(famFilter.value, v4in, v6in, v4out, v6out),
+    datasets: stackedMirrorDatasets(famFilter.value, v4in, v6in, v4out, v6out, mirrorFlip.value),
   }
 }
 
@@ -493,6 +502,13 @@ onUnmounted(() => {
                   @click="famFilter = opt.v as any"
                 >{{ opt.label }}</button>
               </div>
+              <button
+                class="p-1.5 rounded-md border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/40 transition-colors"
+                title="Inverter lados entrada/saída"
+                @click="toggleFlip"
+              >
+                <ArrowUpDown class="w-3.5 h-3.5" />
+              </button>
               <span class="relative flex h-2 w-2">
                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60"></span>
                 <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>

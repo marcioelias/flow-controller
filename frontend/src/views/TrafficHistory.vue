@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import { COLOR_IN, COLOR_OUT, COLOR_UNKNOWN, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, type FamFilter } from '../lib/chartTheme'
+import { COLOR_IN, COLOR_OUT, COLOR_UNKNOWN, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, loadMirrorFlip, saveMirrorFlip, type FamFilter } from '../lib/chartTheme'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -14,7 +14,7 @@ import {
   Legend,
   Filler,
 } from 'chart.js'
-import { TrendingUp, RefreshCw, ArrowDown, ArrowUp } from 'lucide-vue-next'
+import { TrendingUp, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-vue-next'
 import { formatBytes } from '../utils/format'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler)
@@ -50,6 +50,11 @@ const selectedDevice = ref<string>('')
 const selectedHours = ref(1)
 // Filtro de família: empilhado (Todos) ou uma família isolada
 const famFilter = ref<FamFilter>('all')
+const mirrorFlip = ref(loadMirrorFlip())
+function toggleFlip() {
+  mirrorFlip.value = !mirrorFlip.value
+  saveMirrorFlip(mirrorFlip.value)
+}
 const points = ref<TimelinePoint[]>([])
 const loading = ref(false)
 
@@ -110,6 +115,7 @@ const lineChartData = computed(() => {
     points.value.map((p) => +toMbps(p.v6_in_bytes).toFixed(3)),
     points.value.map((p) => +toMbps(p.v4_out_bytes).toFixed(3)),
     points.value.map((p) => +toMbps(p.v6_out_bytes).toFixed(3)),
+    mirrorFlip.value,
   )
 
   if (famFilter.value === 'all' && hasUnknown.value) {
@@ -267,6 +273,14 @@ onUnmounted(() => {
               {{ opt.label }}
             </option>
           </select>
+
+          <button
+            class="p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/50 transition-colors"
+            title="Inverter lados entrada/saída"
+            @click="toggleFlip"
+          >
+            <ArrowUpDown class="w-4 h-4" />
+          </button>
 
           <button
             @click="loadData"

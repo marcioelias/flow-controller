@@ -14,11 +14,28 @@ export const LIVE_WINDOW_SECS = 300
 const SS_KEY = 'fv-live-window-v1'
 const SAVE_EVERY_MS = 5_000
 
-const buckets = new Map<number, LiveBucket>()
-const listeners = new Set<(stats: any) => void>()
-let ws: WebSocket | null = null
-let started = false
-let lastSave = 0
+// Singleton em globalThis: escopo de módulo não sobrevive ao HMR do vite —
+// cada re-import abria MAIS um WebSocket somando as mesmas fatias em
+// duplicidade (picos em 2x/3x no gráfico durante o dev).
+interface LiveState {
+  buckets: Map<number, LiveBucket>
+  listeners: Set<(stats: any) => void>
+  ws: WebSocket | null
+  started: boolean
+  lastSave: number
+}
+const G = globalThis as any
+const S: LiveState =
+  G.__fvLiveTraffic ??
+  (G.__fvLiveTraffic = {
+    buckets: new Map(),
+    listeners: new Set(),
+    ws: null,
+    started: false,
+    lastSave: 0,
+  })
+const buckets = S.buckets
+const listeners = S.listeners
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000)
@@ -59,8 +76,8 @@ function restore() {
 
 function save() {
   const now = Date.now()
-  if (now - lastSave < SAVE_EVERY_MS) return
-  lastSave = now
+  if (now - S.lastSave < SAVE_EVERY_MS) return
+  S.lastSave = now
   pruneBuckets(buckets)
   try {
     const rows = [...buckets.entries()].map(
@@ -74,7 +91,8 @@ function save() {
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  ws = new WebSocket(`${proto}//${location.host}/ws`)
+  const ws = new WebSocket(`${proto}//${location.host}/ws`)
+  S.ws = ws
 
   ws.onmessage = (e) => {
     try {
@@ -93,8 +111,8 @@ function connect() {
 }
 
 export function useLiveTraffic() {
-  if (!started) {
-    started = true
+  if (!S.started) {
+    S.started = true
     restore()
     connect()
   }

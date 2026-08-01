@@ -46,6 +46,19 @@ pub struct LicenseStatus {
     pub fingerprint: String,
     /// Non-None when `valid == false` — describes why the license is invalid.
     pub message: Option<String>,
+    // ── Estado de enforcement em runtime (task 14.1) — preenchido pelo enforcer ──
+    /// Média de 5 min acima de max_bps neste momento
+    #[serde(default)]
+    pub over_limit: bool,
+    /// Excedente sustentado por 7+ dias — views analíticas bloqueadas
+    #[serde(default)]
+    pub degraded: bool,
+    /// Média de bps dos últimos 5 min (medida no ClickHouse)
+    #[serde(default)]
+    pub current_bps: u64,
+    /// Unix secs do início do excedente sustentado (None = dentro do limite)
+    #[serde(default)]
+    pub over_since: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +83,10 @@ pub fn free_tier() -> LicenseStatus {
         expires_at: None,
         fingerprint: machine_fingerprint(),
         message: None,
+        over_limit: false,
+        degraded: false,
+        current_bps: 0,
+        over_since: None,
     }
 }
 
@@ -240,6 +257,22 @@ pub fn validate_license_string(license_str: &str) -> LicenseStatus {
         expires_at: payload.expires_at,
         fingerprint: fp,
         message: None,
+        over_limit: false,
+        degraded: false,
+        current_bps: 0,
+        over_since: None,
+    }
+}
+
+/// True quando a data (YYYY-MM-DD) já passou. Datas inválidas contam como
+/// expiradas — licença malformada não deve conceder acesso.
+pub fn is_expired(expires_at: Option<&str>) -> bool {
+    match expires_at {
+        None => false,
+        Some(exp) => match chrono::NaiveDate::parse_from_str(exp, "%Y-%m-%d") {
+            Ok(d) => d < chrono::Utc::now().date_naive(),
+            Err(_) => true,
+        },
     }
 }
 
@@ -267,6 +300,10 @@ fn invalid_status(message: String, fingerprint: String) -> LicenseStatus {
         expires_at: None,
         fingerprint,
         message: Some(message),
+        over_limit: false,
+        degraded: false,
+        current_bps: 0,
+        over_since: None,
     }
 }
 

@@ -1,4 +1,4 @@
-# Task 14.1 — Enforcement da licença (free tier) 🔲
+# Task 14.1 — Enforcement da licença (free tier) ✅
 
 **Phase:** 14 (Backlog)
 **Effort:** a definir
@@ -28,3 +28,23 @@ produto), mas deixar o limite visível e a visão analítica reduzida.
 
 - Comportamento escolhido implementado e coberto por teste
 - Tela de Licença descreve exatamente o que o free tier limita
+
+## Decisão (Marcio, 01/08/2026) e implementação
+
+- **Excedente de `max_bps`**: banner + métrica sempre; **degradação após 7 dias
+  corridos** de excedente sustentado — views analíticas respondem HTTP 402 e o
+  frontend mostra paywall. Coleta nunca é limitada.
+- **`max_talkers` em todas as views analíticas**: Top Talkers, ASN e Aplicações
+  limitadas ao teto da licença; no Top Talkers o restante vira linha "Outros".
+
+### Componentes
+- `enforcement.rs`: task de 60s — média de 5 min no ClickHouse vs `max_bps`,
+  excedente persistido em settings (`LICENSE_OVER_BPS_SINCE`, sobrevive a
+  restart), rebaixamento de licença expirada em runtime
+- `LicenseStatus`: campos runtime `over_limit`, `degraded`, `current_bps`,
+  `over_since` expostos no `GET /api/license`
+- `stats.rs`: `license_gate()` nos três handlers (402 quando degradado; clamp
+  de limit)
+- Métricas: `license_over_bps`, `license_degraded`
+- Frontend: banner global no AppLayout (âmbar = excedente, vermelho =
+  degradado), paywall nas três views, linha "Outros" no Top Talkers

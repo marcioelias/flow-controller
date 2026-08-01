@@ -36,6 +36,7 @@ const selectedDevice = ref<string>('')
 const selectedMinutes = ref(5)
 const rows = ref<PortRow[]>([])
 const loading = ref(false)
+const paywalled = ref(false)
 
 const minuteOptions = [
   { label: 'Últimos 5m', value: 5 },
@@ -108,6 +109,7 @@ async function loadData() {
     const res = await fetch(`/api/stats/ports?${params}`, {
       headers: authStore.getAuthHeaders(),
     })
+    paywalled.value = res.status === 402
     if (res.ok) rows.value = await res.json()
   } catch {
     rows.value = []
@@ -133,6 +135,19 @@ onUnmounted(() => {
   <div class="p-8">
     <div class="max-w-7xl mx-auto space-y-6">
       <!-- Header -->
+      <!-- Paywall: excedente sustentado da licença (HTTP 402) -->
+      <div v-if="paywalled" class="bg-amber-500/5 border border-amber-500/30 rounded-xl p-10 text-center space-y-3">
+        <p class="text-amber-400 font-semibold text-lg">Limite da licença excedido há mais de 7 dias</p>
+        <p class="text-sm text-zinc-400 max-w-lg mx-auto">
+          A coleta continua completa — nenhum dado foi perdido. As views analíticas ficam
+          bloqueadas até aplicar uma licença adequada ao seu tráfego ou o volume voltar ao limite.
+        </p>
+        <router-link to="/license" class="inline-block mt-2 px-4 py-2 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors text-sm font-medium">
+          Aplicar licença
+        </router-link>
+      </div>
+
+      <template v-if="!paywalled">
       <header class="flex justify-between items-center pb-4 border-b border-zinc-800">
         <div>
           <h1 class="text-3xl font-bold tracking-tight flex items-center gap-2">
@@ -232,6 +247,7 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
+      </template>
     </div>
   </div>
 </template>

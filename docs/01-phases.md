@@ -351,7 +351,7 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 
 | Task | Spec file | Status |
 |------|-----------|--------|
-| 14.1 Enforcement da licença free tier (decisão do Marcio pendente) | `tasks/task-14.1-license-enforcement.md` | 🔲 |
+| 14.1 Enforcement da licença free tier (banner + degradação 7d + cap de talkers) | `tasks/task-14.1-license-enforcement.md` | ✅ |
 
 ---
 

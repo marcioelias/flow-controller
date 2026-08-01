@@ -30,6 +30,10 @@ pub struct CollectorMetrics {
     /// 1 when an exporter reported both ingress and egress flows in the same
     /// window — summed totals would double-count that exporter
     pub exporter_bidirectional: IntGaugeVec,
+    /// 1 quando a média de 5 min excede o max_bps da licença
+    pub license_over_bps: IntGauge,
+    /// 1 quando o excedente é sustentado (7d+) e as views analíticas bloqueiam
+    pub license_degraded: IntGauge,
 }
 
 impl Default for CollectorMetrics {
@@ -138,6 +142,17 @@ impl CollectorMetrics {
             .register(Box::new(exporter_bidirectional.clone()))
             .unwrap();
 
+        let license_over_bps = gauge(
+            &registry,
+            "license_over_bps",
+            "1 when 5-min average traffic exceeds the licensed max_bps",
+        );
+        let license_degraded = gauge(
+            &registry,
+            "license_degraded",
+            "1 when sustained license overage has degraded analytic views",
+        );
+
         Self {
             registry,
             packets_received,
@@ -153,6 +168,8 @@ impl CollectorMetrics {
             export_queue_depth,
             exporter_sampling_rate,
             exporter_bidirectional,
+            license_over_bps,
+            license_degraded,
         }
     }
 }

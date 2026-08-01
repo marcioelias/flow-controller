@@ -7,6 +7,7 @@ mod bgp_config;
 mod bgp_control;
 mod bgp_session_monitor;
 mod detector;
+mod enforcement;
 mod exporters;
 mod features;
 mod license;
@@ -524,6 +525,14 @@ fn main() -> anyhow::Result<()> {
         rt.spawn(async move {
             bgp_session_monitor::bgp_session_monitor(monitor_pool, monitor_sessions, monitor_pipe)
                 .await;
+        });
+    }
+
+    // Spawn license enforcer (task 14.1)
+    {
+        let enf_state = app_state.clone();
+        rt.spawn(async move {
+            enforcement::run_enforcer(enf_state).await;
         });
     }
 

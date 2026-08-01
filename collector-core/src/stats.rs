@@ -103,6 +103,22 @@ pub async fn get_protocol_stats_handler(
 
 // ─── 2.1 Top talkers ─────────────────────────────────────────────────────────
 
+/// Gate de licença das views analíticas (task 14.1): degradado → 402;
+/// senão devolve o teto de linhas permitido pelo max_talkers.
+fn license_gate(
+    state: &crate::auth::AppState,
+    requested_limit: u32,
+) -> Result<(u32, bool), StatusCode> {
+    let lic = state.license.read().unwrap();
+    if lic.degraded {
+        return Err(StatusCode::PAYMENT_REQUIRED);
+    }
+    match lic.max_talkers {
+        Some(t) if t < requested_limit => Ok((t, true)),
+        _ => Ok((requested_limit, false)),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TopTalkersQuery {
     pub exporter_ip: Option<String>,
@@ -122,11 +138,12 @@ pub struct TopTalkerRow {
 }
 
 pub async fn get_top_talkers_handler(
-    State(_state): State<Arc<crate::auth::AppState>>,
+    State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<TopTalkersQuery>,
 ) -> Result<Json<Vec<TopTalkerRow>>, StatusCode> {
     let minutes = params.minutes.unwrap_or(5).min(1440);
-    let limit = params.limit.unwrap_or(20).min(100);
+    let requested = params.limit.unwrap_or(20).min(100);
+    let (limit, capped) = license_gate(&state, requested)?;
     let wc = where_clause(params.exporter_ip.as_deref(), minutes, "MINUTE");
 
     let cols = "sum(bytes) AS total_bytes, sum(packets) AS total_packets, \
@@ -144,9 +161,38 @@ pub async fn get_top_talkers_handler(
     );
 
     let val = ch_query(&sql).await?;
-    let mut rows = parse_rows::<TopTalkerRowRaw>(&val);
+    let mut rows: Vec<TopTalkerRow> = parse_rows::<TopTalkerRowRaw>(&val);
     rows.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
     rows.truncate(limit as usize);
+
+    // Fora da licença: agrega o restante como "Outros" — o dado existe,
+    // o detalhe é o que a licença libera
+    if capped {
+        let total_sql = format!(
+            "SELECT sum(b) FROM ( \
+               SELECT sum(bytes) AS b FROM network_flows_v4 {wc} \
+               UNION ALL SELECT sum(bytes) AS b FROM network_flows_v6 {wc})"
+        );
+        if let Ok(val) = ch_query(&format!("{total_sql} FORMAT JSON")).await {
+            let grand: u64 = val["data"][0]
+                .as_object()
+                .and_then(|o| o.values().next())
+                .map(parse_u64_field)
+                .unwrap_or(0);
+            let shown: u64 = rows.iter().map(|r| r.total_bytes).sum();
+            if grand > shown {
+                rows.push(TopTalkerRow {
+                    src_ip: "outros".to_string(),
+                    total_bytes: grand - shown,
+                    total_packets: 0,
+                    flow_count: 0,
+                    in_bytes: 0,
+                    out_bytes: 0,
+                    unknown_bytes: 0,
+                });
+            }
+        }
+    }
     Ok(Json(rows))
 }
 
@@ -194,11 +240,12 @@ pub struct AsnRow {
 }
 
 pub async fn get_asn_stats_handler(
-    State(_state): State<Arc<crate::auth::AppState>>,
+    State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<AsnQuery>,
 ) -> Result<Json<Vec<AsnRow>>, StatusCode> {
     let minutes = params.minutes.unwrap_or(60).min(1440);
-    let limit = params.limit.unwrap_or(20).min(100);
+    let requested = params.limit.unwrap_or(20).min(100);
+    let (limit, _) = license_gate(&state, requested)?;
     let direction = params.direction.as_deref().unwrap_or("both");
 
     let mut merged: HashMap<u64, (u64, u64)> = HashMap::new();
@@ -334,11 +381,12 @@ fn port_to_service(port: u16) -> &'static str {
 }
 
 pub async fn get_port_breakdown_handler(
-    State(_state): State<Arc<crate::auth::AppState>>,
+    State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<PortBreakdownQuery>,
 ) -> Result<Json<Vec<PortRow>>, StatusCode> {
     let minutes = params.minutes.unwrap_or(5).min(1440);
-    let limit = params.limit.unwrap_or(20).min(100);
+    let requested = params.limit.unwrap_or(20).min(100);
+    let (limit, _) = license_gate(&state, requested)?;
     let wc = where_clause(params.exporter_ip.as_deref(), minutes, "MINUTE");
 
     let sql = format!(
