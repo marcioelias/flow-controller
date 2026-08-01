@@ -40,6 +40,9 @@ pub struct ThreadLocalTemplateCache {
     /// Sampling rate learned from options data records, per (exporter, source_id).
     /// 1 = unsampled / not learned yet.
     sampling_rates: HashMap<(Ipv4Addr, u32), u32, RandomState>,
+    /// systemInitTimeMilliseconds (IE 160) por (exporter, domain) — base para
+    /// converter flowStart/EndSysUpTime (IE 21/22) em unix ms no IPFIX
+    sys_inits: HashMap<(Ipv4Addr, u32), u64, RandomState>,
 }
 
 impl Default for ThreadLocalTemplateCache {
@@ -53,6 +56,7 @@ impl ThreadLocalTemplateCache {
         Self {
             cache: HashMap::with_hasher(RandomState::new()),
             sampling_rates: HashMap::with_hasher(RandomState::new()),
+            sys_inits: HashMap::with_hasher(RandomState::new()),
         }
     }
 
@@ -83,6 +87,14 @@ impl ThreadLocalTemplateCache {
     /// Iterate learned sampling rates (for metrics export)
     pub fn sampling_rates(&self) -> impl Iterator<Item = (&(Ipv4Addr, u32), &u32)> {
         self.sampling_rates.iter()
+    }
+
+    pub fn sys_init_ms(&self, exporter_ip: Ipv4Addr, source_id: u32) -> Option<u64> {
+        self.sys_inits.get(&(exporter_ip, source_id)).copied()
+    }
+
+    pub fn set_sys_init_ms(&mut self, exporter_ip: Ipv4Addr, source_id: u32, ms: u64) {
+        self.sys_inits.insert((exporter_ip, source_id), ms);
     }
 
     pub fn get(&self, key: &TemplateKey) -> Option<&Template> {

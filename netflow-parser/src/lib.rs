@@ -96,6 +96,7 @@ pub const IANA_SAMPLING_INTERVAL: u16 = 34; // v9 classic
 pub const IANA_SAMPLER_RANDOM_INTERVAL: u16 = 50; // v9 random sampler
 pub const IANA_SAMPLING_PKT_INTERVAL: u16 = 305; // IPFIX
 pub const IANA_SAMPLING_PKT_SPACE: u16 = 306; // IPFIX — rate = (interval+space)/interval
+pub const IANA_SYSTEM_INIT_TIME_MS: u16 = 160; // IPFIX options — unix ms do boot
 
 /// IPFIX variable-length field marker (RFC 7011 §7): actual length is a
 /// per-record prefix, not part of the template.
@@ -284,13 +285,17 @@ fn parse_ipfix_options_template_set(
 
 /// Decode an options data record set: extract sampling-related IEs.
 /// Returns the sampling rate found, if any; produces no flows.
-fn parse_options_data_set(set_data: &[u8], template: &template_cache::Template) -> Option<u32> {
+fn parse_options_data_set(
+    set_data: &[u8],
+    template: &template_cache::Template,
+) -> (Option<u32>, Option<u64>) {
     let record_size: usize = template.fields.iter().map(|f| f.length as usize).sum();
     if record_size == 0 || template.fields.iter().any(|f| f.length == VARLEN) {
-        return None;
+        return (None, None);
     }
 
     let mut learned: Option<u32> = None;
+    let mut sys_init: Option<u64> = None;
     let mut d_ptr = 0usize;
 
     while d_ptr + record_size <= set_data.len() {
@@ -311,6 +316,7 @@ fn parse_options_data_set(set_data: &[u8], template: &template_cache::Template) 
                 IANA_SAMPLER_RANDOM_INTERVAL => random_interval = Some(read_uint(field_data)),
                 IANA_SAMPLING_PKT_INTERVAL => pkt_interval = Some(read_uint(field_data)),
                 IANA_SAMPLING_PKT_SPACE => pkt_space = Some(read_uint(field_data)),
+                IANA_SYSTEM_INIT_TIME_MS => sys_init = Some(read_uint(field_data)),
                 _ => {}
             }
             f_ptr += f_len;
@@ -333,7 +339,7 @@ fn parse_options_data_set(set_data: &[u8], template: &template_cache::Template) 
         d_ptr += record_size;
     }
 
-    learned
+    (learned, sys_init)
 }
 
 /// Header clock context needed to resolve flow timestamps.
@@ -345,6 +351,9 @@ pub struct TimeCtx {
     pub export_ms: u64,
     /// Header sysUptime in ms — Some only for NetFlow v9
     pub uptime_ms: Option<u32>,
+    /// systemInitTimeMilliseconds (IE 160) aprendido via options — base para
+    /// IE 21/22 em IPFIX, que não tem sysUptime no header
+    pub sys_init_ms: Option<u64>,
 }
 
 /// Seconds between the NTP epoch (1900) and the unix epoch (1970)
@@ -399,8 +408,6 @@ fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFl
 fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8], time: &TimeCtx) {
     let f_len = field_data.len();
     match field_type {
-        IANA_FIRST_SWITCHED => flow.start_ms = v9_uptime_to_unix_ms(read_uint(field_data), time),
-        IANA_LAST_SWITCHED => flow.end_ms = v9_uptime_to_unix_ms(read_uint(field_data), time),
         IANA_FLOW_START_SEC => flow.start_ms = read_uint(field_data) * 1000,
         IANA_FLOW_END_SEC => flow.end_ms = read_uint(field_data) * 1000,
         IANA_FLOW_START_MS => flow.start_ms = read_uint(field_data),
@@ -462,6 +469,37 @@ fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8], t
     }
 }
 
+/// IE 21/22 (FIRST/LAST_SWITCHED) são relativos e precisam de contexto:
+/// v9 usa o sysUptime do header; IPFIX usa IE 160 aprendido via options; sem
+/// nenhum dos dois, ancora o fim no export e preserva a duração exata
+/// (last − first), que independe da base de tempo.
+#[inline]
+fn resolve_switched_times(
+    flow: &mut NormalizedFlow,
+    raw_first: Option<u64>,
+    raw_last: Option<u64>,
+    time: &TimeCtx,
+) {
+    // IEs absolutos (150–155), se presentes, têm precedência
+    if flow.start_ms != 0 || flow.end_ms != 0 {
+        return;
+    }
+    let (Some(first), Some(last)) = (raw_first, raw_last) else {
+        return;
+    };
+    if time.uptime_ms.is_some() {
+        flow.start_ms = v9_uptime_to_unix_ms(first, time);
+        flow.end_ms = v9_uptime_to_unix_ms(last, time);
+    } else if let Some(init) = time.sys_init_ms {
+        flow.start_ms = init.saturating_add(first);
+        flow.end_ms = init.saturating_add(last);
+    } else {
+        let duration_ms = (last as u32).wrapping_sub(first as u32) as u64;
+        flow.end_ms = time.export_ms;
+        flow.start_ms = time.export_ms.saturating_sub(duration_ms);
+    }
+}
+
 /// Parse a data set and return decoded NormalizedFlow records.
 fn parse_data_set(
     set_data: &[u8],
@@ -509,20 +547,23 @@ fn parse_data_set(
         let mut flow = empty_flow(export_time, exporter_ip);
 
         let mut f_ptr = d_ptr;
+        let mut raw_first: Option<u64> = None;
+        let mut raw_last: Option<u64> = None;
         for field in &template.fields {
             let f_len = field.length as usize;
             if f_ptr + f_len > set_data.len() {
                 break;
             }
-            decode_field(
-                &mut flow,
-                field.field_type,
-                &set_data[f_ptr..f_ptr + f_len],
-                time,
-            );
+            let field_data = &set_data[f_ptr..f_ptr + f_len];
+            match field.field_type {
+                IANA_FIRST_SWITCHED => raw_first = Some(read_uint(field_data)),
+                IANA_LAST_SWITCHED => raw_last = Some(read_uint(field_data)),
+                _ => decode_field(&mut flow, field.field_type, field_data, time),
+            }
             f_ptr += f_len;
         }
 
+        resolve_switched_times(&mut flow, raw_first, raw_last, time);
         apply_sampling(&mut flow, sampling_rate);
         flows.push(flow);
         d_ptr += record_size;
@@ -577,6 +618,8 @@ fn parse_varlen_records(
         let mut flow = empty_flow(export_time, exporter_ip);
 
         let mut f_ptr = d_ptr;
+        let mut raw_first: Option<u64> = None;
+        let mut raw_last: Option<u64> = None;
         for field in &template.fields {
             let f_len = if field.length == VARLEN {
                 if f_ptr >= set_data.len() {
@@ -601,15 +644,16 @@ fn parse_varlen_records(
             if f_ptr + f_len > set_data.len() {
                 break 'records;
             }
-            decode_field(
-                &mut flow,
-                field.field_type,
-                &set_data[f_ptr..f_ptr + f_len],
-                time,
-            );
+            let field_data = &set_data[f_ptr..f_ptr + f_len];
+            match field.field_type {
+                IANA_FIRST_SWITCHED => raw_first = Some(read_uint(field_data)),
+                IANA_LAST_SWITCHED => raw_last = Some(read_uint(field_data)),
+                _ => decode_field(&mut flow, field.field_type, field_data, time),
+            }
             f_ptr += f_len;
         }
 
+        resolve_switched_times(&mut flow, raw_first, raw_last, time);
         apply_sampling(&mut flow, sampling_rate);
         flows.push(flow);
         d_ptr = f_ptr;
@@ -639,9 +683,17 @@ fn handle_data_set(
 
     // Options data records update the sampling rate; they carry no flows.
     // Read in one scope so the mutable cache update can happen after.
-    let learned_rate = match templates.get(&key) {
+    let (learned_rate, learned_sys_init) = match templates.get(&key) {
         Some(t) if t.is_options => parse_options_data_set(set_data, t),
         Some(_) => {
+            // IE 160 pode ter chegado neste mesmo pacote — resolve agora,
+            // não no início da mensagem
+            let set_time = TimeCtx {
+                sys_init_ms: time
+                    .sys_init_ms
+                    .or_else(|| templates.sys_init_ms(exporter_ip, source_id)),
+                ..*time
+            };
             let mut data_flows = parse_data_set(
                 set_data,
                 template_id,
@@ -649,7 +701,7 @@ fn handle_data_set(
                 export_time,
                 exporter_ip,
                 templates,
-                time,
+                &set_time,
             );
             flows.append(&mut data_flows);
             return;
@@ -659,6 +711,9 @@ fn handle_data_set(
 
     if let Some(rate) = learned_rate {
         templates.set_sampling_rate(exporter_ip, source_id, rate);
+    }
+    if let Some(ms) = learned_sys_init {
+        templates.set_sys_init_ms(exporter_ip, source_id, ms);
     }
 }
 
@@ -677,6 +732,7 @@ fn parse_v9_message(
     let time = TimeCtx {
         export_ms: hdr.unix_secs as u64 * 1000,
         uptime_ms: Some(hdr.sys_uptime),
+        sys_init_ms: None,
     };
     let mut flows = Vec::with_capacity(32);
     let mut ptr = 20usize; // v9 header is 20 bytes
@@ -752,6 +808,7 @@ fn parse_ipfix_message(
     let time = TimeCtx {
         export_ms: hdr.export_time as u64 * 1000,
         uptime_ms: None,
+        sys_init_ms: None, // resolvido por data set (handle_data_set)
     };
     let mut flows = Vec::with_capacity(32);
     let mut ptr = 16usize; // IPFIX header is 16 bytes
@@ -1384,5 +1441,92 @@ mod tests {
         let flows = parse_packet(&pkt, &mut cache, exporter).unwrap();
         assert_eq!(flows[0].start_ms, 0);
         assert_eq!(flows[0].end_ms, 0);
+    }
+
+    // IPFIX com IE 21/22 (sysUptime-relativos) — sem IE 160 o parser ancora o
+    // fim no export_time preservando a duração exata
+    fn build_ipfix_switched_packet(first: u32, last: u32, with_init: Option<u64>) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        let template_id: u16 = 500;
+        let fields: &[(u16, u16)] = &[
+            (IANA_FIRST_SWITCHED, 4),
+            (IANA_LAST_SWITCHED, 4),
+            (IANA_IN_BYTES, 8),
+        ];
+        let tmpl_set_len = 4 + 4 + fields.len() * 4;
+        let data_set_len = 4 + 16;
+
+        // Options: scope exportingProcessId(130,4) + systemInitTimeMilliseconds(160,8)
+        let (opt_tmpl_len, opt_data_len) = if with_init.is_some() {
+            (4 + 6 + 8, 4 + 12)
+        } else {
+            (0, 0)
+        };
+        let total_len = 16 + tmpl_set_len + opt_tmpl_len + opt_data_len + data_set_len;
+
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&(total_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&1_700_000_000u32.to_be_bytes());
+        pkt.extend_from_slice(&1u32.to_be_bytes());
+        pkt.extend_from_slice(&100u32.to_be_bytes());
+
+        pkt.extend_from_slice(&2u16.to_be_bytes());
+        pkt.extend_from_slice(&(tmpl_set_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+        for (ft, fl) in fields {
+            pkt.extend_from_slice(&ft.to_be_bytes());
+            pkt.extend_from_slice(&fl.to_be_bytes());
+        }
+
+        if let Some(init) = with_init {
+            let opt_id: u16 = 501;
+            pkt.extend_from_slice(&3u16.to_be_bytes());
+            pkt.extend_from_slice(&(opt_tmpl_len as u16).to_be_bytes());
+            pkt.extend_from_slice(&opt_id.to_be_bytes());
+            pkt.extend_from_slice(&2u16.to_be_bytes()); // field_count
+            pkt.extend_from_slice(&1u16.to_be_bytes()); // scope_field_count
+            pkt.extend_from_slice(&130u16.to_be_bytes());
+            pkt.extend_from_slice(&4u16.to_be_bytes());
+            pkt.extend_from_slice(&IANA_SYSTEM_INIT_TIME_MS.to_be_bytes());
+            pkt.extend_from_slice(&8u16.to_be_bytes());
+
+            pkt.extend_from_slice(&opt_id.to_be_bytes());
+            pkt.extend_from_slice(&(opt_data_len as u16).to_be_bytes());
+            pkt.extend_from_slice(&7u32.to_be_bytes()); // scope value
+            pkt.extend_from_slice(&init.to_be_bytes());
+        }
+
+        pkt.extend_from_slice(&template_id.to_be_bytes());
+        pkt.extend_from_slice(&(data_set_len as u16).to_be_bytes());
+        pkt.extend_from_slice(&first.to_be_bytes());
+        pkt.extend_from_slice(&last.to_be_bytes());
+        pkt.extend_from_slice(&2048u64.to_be_bytes());
+        pkt
+    }
+
+    #[test]
+    fn test_ipfix_switched_fallback_duration() {
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 9));
+        // flow durou 15s (uptime 40s → 55s), sem IE 160
+        let pkt = build_ipfix_switched_packet(40_000, 55_000, None);
+        let flows = parse_packet(&pkt, &mut cache, exporter).unwrap();
+        assert_eq!(flows.len(), 1);
+        let export_ms = 1_700_000_000u64 * 1000;
+        assert_eq!(flows[0].end_ms, export_ms);
+        assert_eq!(flows[0].start_ms, export_ms - 15_000);
+    }
+
+    #[test]
+    fn test_ipfix_switched_with_sys_init() {
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 9));
+        let boot_ms: u64 = 1_699_999_000_000;
+        let pkt = build_ipfix_switched_packet(40_000, 55_000, Some(boot_ms));
+        let flows = parse_packet(&pkt, &mut cache, exporter).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].start_ms, boot_ms + 40_000);
+        assert_eq!(flows[0].end_ms, boot_ms + 55_000);
     }
 }
