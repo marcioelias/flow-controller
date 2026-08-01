@@ -16,10 +16,25 @@ const routes = [
   },
   {
     path: '/dashboard',
-    name: 'Dashboard',
-    component: Dashboard,
+    component: () => import('./views/DashboardTabs.vue'),
     meta: { requiresAuth: true },
+    children: [
+      { path: '', name: 'Dashboard', component: Dashboard },
+      {
+        path: 'history',
+        name: 'TrafficHistory',
+        component: () => import('./views/TrafficHistory.vue'),
+      },
+      {
+        path: 'server',
+        name: 'ServerHealth',
+        component: () => import('./views/ServerHealth.vue'),
+      },
+    ],
   },
+  // Rotas antigas seguem funcionando (bookmarks)
+  { path: '/history', redirect: '/dashboard/history' },
+  { path: '/server', redirect: '/dashboard/server' },
   {
     path: '/exporters',
     name: 'Exporters',
@@ -78,18 +93,6 @@ const routes = [
     path: '/ports',
     name: 'PortBreakdown',
     component: () => import('./views/PortBreakdown.vue'),
-    meta: { requiresAuth: true },
-  },
-  {
-    path: '/history',
-    name: 'TrafficHistory',
-    component: () => import('./views/TrafficHistory.vue'),
-    meta: { requiresAuth: true },
-  },
-  {
-    path: '/server',
-    name: 'ServerHealth',
-    component: () => import('./views/ServerHealth.vue'),
     meta: { requiresAuth: true },
   },
   // BGP routes (admin only)

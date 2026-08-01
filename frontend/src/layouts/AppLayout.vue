@@ -4,7 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import {
   LayoutDashboard, Users, Network, LogOut, ChevronDown, ChevronRight,
-  User as UserIcon, Key, TrendingUp, Globe, Plug, UserCog, KeyRound, Info,
+  User as UserIcon, Key, Globe, Plug, UserCog, KeyRound, Info,
   SlidersHorizontal, BugPlay, Server, DatabaseBackup, Activity, Tag,
   ListFilter, History, Bell, ShieldAlert, MessageCircle, Brain,
 } from 'lucide-vue-next'
@@ -89,20 +89,10 @@ onUnmounted(() => document.removeEventListener('click', closeUserMenu))
       <!-- Navigation -->
       <nav class="flex-1 overflow-y-auto py-4 px-3 space-y-0.5">
 
-        <!-- ── Dashboards (always visible, never collapsible) ── -->
+        <!-- ── Dashboard (abas internas: Tempo real / Histórico / Servidor) ── -->
         <router-link to="/dashboard"
           class="nav-link" :class="route.path.startsWith('/dashboard') ? 'nav-active' : 'nav-idle'">
           <LayoutDashboard class="w-5 h-5" /> Dashboard
-        </router-link>
-
-        <router-link to="/history"
-          class="nav-link" :class="route.path.startsWith('/history') ? 'nav-active' : 'nav-idle'">
-          <TrendingUp class="w-5 h-5" /> Histórico
-        </router-link>
-
-        <router-link to="/server"
-          class="nav-link" :class="route.path.startsWith('/server') ? 'nav-active' : 'nav-idle'">
-          <Server class="w-5 h-5" /> Servidor
         </router-link>
 
         <!-- ── Análise ── -->
