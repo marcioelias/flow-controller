@@ -322,6 +322,25 @@ Depende da Fase 11 (séries por direção alimentam tiles e gráfico espelhado).
 
 ---
 
+## Phase 13 — Fidelidade Temporal 🔲
+**Effort:** ~1 dia  |  **Files touched:** `netflow-parser/`, `flow-types/`, `aggregator/`, `collector-core/src/`, `frontend/src/`
+
+Flow telemetry chega atrasada por natureza (active timeout do exporter). Hoje o
+coletor carimba tudo na chegada: um upload de 20s vira um espigão de 1s, datado
+errado. Esta fase usa os timestamps que o protocolo já envia para reconstruir o
+tráfego como ele realmente aconteceu.
+
+| Task | Spec file | Status |
+|------|-----------|--------|
+| 13.1 Decodificar flowStart/flowEnd (v9 + IPFIX) | `tasks/task-13.1-flow-timestamps.md` | 🔲 |
+| 13.2 Distribuição temporal dos bytes (time spreading) | `tasks/task-13.2-time-spread.md` | 🔲 |
+| 13.3 Indicador de latência de telemetria na UI | `tasks/task-13.3-latency-hint.md` | 🔲 |
+| 13.4 Gráfico ao vivo espelhado e sem suavização | `tasks/task-13.4-live-chart-mirror.md` | 🔲 |
+
+Dependências: 13.1 → 13.2; 13.3 e 13.4 independentes.
+
+---
+
 ## Dependency Graph
 
 ```
