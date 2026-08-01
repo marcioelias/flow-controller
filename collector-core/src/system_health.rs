@@ -231,7 +231,7 @@ pub async fn get_health_handler(
     let packets_received = state.metrics.packets_received.get();
     let flows_decoded = state.metrics.flows_decoded.get();
     let packets_dropped = state.metrics.packets_dropped.get();
-    let tmpl_cache_size = state.metrics.template_cache_size.get();
+    let tmpl_cache_size = state.metrics.template_cache_total();
 
     // Suppress unused variable from sysinfo refresh
     let _ = Components::new_with_refreshed_list();

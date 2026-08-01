@@ -1095,6 +1095,7 @@ fn worker_loop(
             templates.prune_old_templates(unix_now_secs() as u64, TEMPLATE_MAX_AGE_SECS);
             worker_metrics
                 .template_cache_size
+                .with_label_values(&[&id.to_string()])
                 .set(templates.len() as i64);
             for ((exp_ip, domain), rate) in templates.sampling_rates() {
                 worker_metrics

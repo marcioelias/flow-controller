@@ -1,3 +1,4 @@
+use prometheus::core::Collector;
 use prometheus::{IntCounter, IntGauge, IntGaugeVec, Opts, Registry};
 
 pub struct CollectorMetrics {
@@ -20,7 +21,8 @@ pub struct CollectorMetrics {
     pub clickhouse_insert_errors: IntCounter,
     /// Rows successfully inserted into ClickHouse
     pub clickhouse_rows_inserted: IntCounter,
-    pub template_cache_size: IntGauge,
+    /// Templates cached, labeled per worker (sum across workers for the total)
+    pub template_cache_size: IntGaugeVec,
     /// Current depth of the export queue (windows waiting for insert)
     pub export_queue_depth: IntGauge,
     /// Sampling rate learned per exporter observation domain (1 = unsampled)
@@ -97,11 +99,17 @@ impl CollectorMetrics {
             "clickhouse_rows_inserted_total",
             "Rows successfully inserted into ClickHouse",
         );
-        let template_cache_size = gauge(
-            &registry,
-            "template_cache_size",
-            "Current number of templates across all workers",
-        );
+        let template_cache_size = IntGaugeVec::new(
+            Opts::new(
+                "template_cache_size",
+                "Templates cached per worker (sum for the total)",
+            ),
+            &["worker"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(template_cache_size.clone()))
+            .unwrap();
         let export_queue_depth = gauge(
             &registry,
             "export_queue_depth",
@@ -146,5 +154,20 @@ impl CollectorMetrics {
             exporter_sampling_rate,
             exporter_bidirectional,
         }
+    }
+}
+
+impl CollectorMetrics {
+    /// Total de templates somando todos os workers (gauge é rotulado por worker)
+    pub fn template_cache_total(&self) -> i64 {
+        self.template_cache_size
+            .collect()
+            .iter()
+            .flat_map(|mf| {
+                mf.get_metric()
+                    .iter()
+                    .map(|m| m.get_gauge().get_value() as i64)
+            })
+            .sum()
     }
 }
