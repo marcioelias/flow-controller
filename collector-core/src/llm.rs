@@ -7,6 +7,7 @@ const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const BATCH_SIZE: i64 = 5;
 
 pub struct LlmClient {
+    language: String,
     endpoint: String,
     model: String,
     client: reqwest::Client,
@@ -36,12 +37,17 @@ impl LlmClient {
                 std::env::var("LLM_MODEL").unwrap_or_else(|_| "qwen2.5:3b".to_string())
             });
 
+        let language = crate::settings::get_value(pool, "APP_LANGUAGE")
+            .await
+            .unwrap_or_else(|| "pt-BR".to_string());
+
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("reqwest LLM client");
 
         Some(Self {
+            language,
             endpoint,
             model,
             client,
@@ -62,6 +68,7 @@ impl LlmClient {
             .build()
             .expect("reqwest LLM client");
         Some(Self {
+            language: std::env::var("APP_LANGUAGE").unwrap_or_else(|_| "pt-BR".to_string()),
             endpoint,
             model,
             client,
@@ -97,12 +104,23 @@ impl LlmClient {
     }
 
     pub async fn explain(&self, event: &AlertEvent) -> anyhow::Result<String> {
-        let prompt = build_prompt(event);
+        let prompt = build_prompt(event, &self.language);
         self.generate(&prompt).await
     }
 }
 
-fn build_prompt(ev: &AlertEvent) -> String {
+/// Nome humano do idioma — modelos pequenos seguem melhor uma instrução
+/// explícita ("português do Brasil") do que uma tag IETF crua.
+fn language_name(tag: &str) -> &str {
+    match tag {
+        t if t.starts_with("pt") => "Brazilian Portuguese (português do Brasil)",
+        t if t.starts_with("es") => "Spanish (español)",
+        t if t.starts_with("en") => "English",
+        _ => tag,
+    }
+}
+
+fn build_prompt(ev: &AlertEvent, language: &str) -> String {
     let ctx = match ev.alert_type.as_str() {
         "upload_inversion" => format!(
             "alert_type=upload_inversion src_ip={} upload={:.1}Mbps download={:.1}Mbps. \
@@ -139,7 +157,9 @@ fn build_prompt(ev: &AlertEvent) -> String {
         "You are a network security analyst for an ISP. Given this network flow alert, \
          write exactly 2-3 sentences: (1) what traffic pattern this indicates, \
          (2) why it is suspicious or harmful, (3) what the operator should verify. \
-         Be concise and technical. Do not repeat the raw numbers verbatim. Context: {ctx}"
+         Be concise and technical. Do not repeat the raw numbers verbatim. \
+         Write your entire answer in {lang}. Context: {ctx}",
+        lang = language_name(language),
     )
 }
 

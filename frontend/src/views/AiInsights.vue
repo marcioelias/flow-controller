@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useAiStore } from '../stores/ai'
-import { Brain, RefreshCw, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-vue-next'
+import { useAuthStore } from '../stores/auth'
+import { Brain, RefreshCw, AlertTriangle, CheckCircle2, Loader2, X, ThumbsDown, ShieldAlert } from 'lucide-vue-next'
 
 const store = useAiStore()
 const page = ref(0)
@@ -57,6 +58,36 @@ onMounted(async () => {
 })
 
 onUnmounted(() => { if (timer) clearInterval(timer) })
+
+const authStore = useAuthStore()
+const selected = ref<any | null>(null)
+const savingFeedback = ref(false)
+
+async function setFeedback(fb: string | null) {
+  if (!selected.value?.id) return
+  savingFeedback.value = true
+  try {
+    const res = await fetch(`/api/ml/events/${selected.value.id}/feedback`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authStore.token}` },
+      body: JSON.stringify({ feedback: fb }),
+    })
+    if (res.ok) {
+      selected.value.feedback = fb
+      await store.loadEvents(page.value, perPage)
+    }
+  } finally {
+    savingFeedback.value = false
+  }
+}
+
+function formatBytesShort(b: number | null): string {
+  if (b == null) return '—'
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + ' GB'
+  if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB'
+  if (b >= 1e3) return (b / 1e3).toFixed(1) + ' kB'
+  return b + ' B'
+}
 
 function formatPps(pps: number): string {
   if (pps >= 1e6) return (pps / 1e6).toFixed(1) + ' Mpps'
@@ -212,12 +243,19 @@ function formatPps(pps: number): string {
           </thead>
           <tbody class="divide-y divide-zinc-800/50">
             <tr v-for="ev in store.events" :key="ev.id"
-              class="hover:bg-zinc-800/30 transition-colors">
+              class="hover:bg-zinc-800/30 transition-colors cursor-pointer"
+              @click="selected = ev">
               <td class="px-4 py-2.5 text-xs text-zinc-500 whitespace-nowrap">
                 {{ formatDate(ev.created_at) }}
               </td>
               <td class="px-4 py-2.5 font-mono text-zinc-400 text-xs">{{ ev.exporter_ip }}</td>
-              <td class="px-4 py-2.5 font-mono text-slate-200 text-xs">{{ ev.src_ip }}</td>
+              <td class="px-4 py-2.5 font-mono text-slate-200 text-xs">
+                {{ ev.src_ip }}
+                <span v-if="ev.feedback === 'false_positive'"
+                  class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-zinc-700/60 text-zinc-400">FP</span>
+                <span v-else-if="ev.feedback === 'confirmed'"
+                  class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-red-500/15 text-red-400">confirmado</span>
+              </td>
               <td class="px-4 py-2.5">
                 <span class="px-2 py-0.5 rounded-full border text-xs font-semibold uppercase"
                   :class="severityColor(ev.severity)">{{ ev.severity }}</span>
@@ -274,5 +312,79 @@ function formatPps(pps: number): string {
         Após ~83 minutos de tráfego, o primeiro modelo será treinado e começará a pontuar flows.
       </p>
     </div>
+  
+    <!-- Detalhe da anomalia (task 15.1) -->
+    <Teleport to="body">
+      <div v-if="selected" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        @click.self="selected = null">
+        <div class="w-full max-w-2xl bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden">
+          <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+            <div class="flex items-center gap-2">
+              <AlertTriangle class="w-5 h-5 text-amber-400" />
+              <h3 class="font-semibold text-slate-100">Anomalia #{{ selected.id }}</h3>
+              <span class="px-2 py-0.5 rounded-full border text-xs font-semibold uppercase"
+                :class="severityColor(selected.severity)">{{ selected.severity }}</span>
+            </div>
+            <button class="text-zinc-500 hover:text-zinc-200" @click="selected = null"><X class="w-5 h-5" /></button>
+          </div>
+
+          <div class="px-6 py-5 space-y-4 text-sm">
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div><p class="text-xs text-zinc-500">Hora</p><p class="text-zinc-200">{{ formatDate(selected.created_at) }}</p></div>
+              <div><p class="text-xs text-zinc-500">Exporter</p><p class="font-mono text-zinc-200">{{ selected.exporter_ip }}</p></div>
+              <div><p class="text-xs text-zinc-500">IP de origem</p><p class="font-mono text-zinc-200">{{ selected.src_ip }}</p></div>
+              <div><p class="text-xs text-zinc-500">Score</p>
+                <p class="font-mono" :class="scoreBadgeColor(scoreFromMessage(selected.message))">
+                  {{ scoreFromMessage(selected.message)?.toFixed(3) ?? '—' }}</p></div>
+              <div><p class="text-xs text-zinc-500">PPS</p><p class="font-mono text-zinc-200">{{ selected.pps != null ? formatPps(selected.pps) : '—' }}</p></div>
+              <div><p class="text-xs text-zinc-500">Pacote médio</p><p class="font-mono text-zinc-200">{{ selected.avg_pkt_bytes != null ? selected.avg_pkt_bytes.toFixed(0) + ' B' : '—' }}</p></div>
+              <div><p class="text-xs text-zinc-500">Upload (janela)</p><p class="font-mono text-zinc-200">{{ formatBytesShort(selected.upload_bytes) }}</p></div>
+              <div><p class="text-xs text-zinc-500">Download (janela)</p><p class="font-mono text-zinc-200">{{ formatBytesShort(selected.download_bytes) }}</p></div>
+            </div>
+
+            <div>
+              <p class="text-xs text-zinc-500 mb-1">Detalhe técnico</p>
+              <p class="font-mono text-xs text-zinc-400 bg-zinc-950/60 border border-zinc-800 rounded-lg px-3 py-2 break-all">{{ selected.message }}</p>
+            </div>
+
+            <div>
+              <p class="text-xs text-zinc-500 mb-1">Explicação IA</p>
+              <p v-if="selected.explanation" class="text-zinc-300 leading-relaxed">{{ selected.explanation }}</p>
+              <p v-else class="text-zinc-600 italic flex items-center gap-1.5"><Loader2 class="w-3 h-3 animate-spin" /> gerando…</p>
+            </div>
+          </div>
+
+          <!-- Feedback do operador → ajusta o threshold do ML por IP -->
+          <div class="px-6 py-4 border-t border-zinc-800 bg-zinc-950/40 flex items-center justify-between gap-3">
+            <p class="text-xs text-zinc-500">
+              Feedback treina o detector: falso positivo eleva o threshold deste IP.
+            </p>
+            <div class="flex items-center gap-2">
+              <button
+                :disabled="savingFeedback"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+                :class="selected.feedback === 'false_positive'
+                  ? 'bg-zinc-700/60 text-zinc-200 border-zinc-600'
+                  : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:text-zinc-200'"
+                @click="setFeedback(selected.feedback === 'false_positive' ? null : 'false_positive')"
+              >
+                <ThumbsDown class="w-3.5 h-3.5" /> Falso positivo
+              </button>
+              <button
+                :disabled="savingFeedback"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+                :class="selected.feedback === 'confirmed'
+                  ? 'bg-red-500/15 text-red-400 border-red-500/40'
+                  : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:text-red-400'"
+                @click="setFeedback(selected.feedback === 'confirmed' ? null : 'confirmed')"
+              >
+                <ShieldAlert class="w-3.5 h-3.5" /> Ameaça confirmada
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
   </div>
 </template>

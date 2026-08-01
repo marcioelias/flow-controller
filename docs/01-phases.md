@@ -356,6 +356,17 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 
 ---
 
+## Phase 15 — Feedback & Explicabilidade
+
+| Task | Spec file | Status |
+|------|-----------|--------|
+| 15.1 Detalhe da anomalia + feedback do operador | `tasks/task-15.1-anomaly-detail.md` | ✅ |
+| 15.2 Feedback → aprendizado do detector (threshold por IP) | `tasks/task-15.2-ml-feedback.md` | ✅ |
+| 15.3 Idioma das explicações IA (APP_LANGUAGE) | `tasks/task-15.3-llm-language.md` | ✅ |
+| 15.4 Reforma da tela de Configurações (abas + CRUD + IA guiada) | `tasks/task-15.4-settings-redesign.md` | 🔲 |
+
+---
+
 ## Dependency Graph
 
 ```

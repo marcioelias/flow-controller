@@ -36,6 +36,9 @@ pub async fn run_ml(
     );
     let mut models: HashMap<String, ExporterModel> = HashMap::new();
     let mut batch_count: u64 = 0;
+    // Falsos positivos marcados pelo operador elevam o threshold daquele IP
+    // (task 15.2): +0.05 por FP, teto de +0.20. Recarregado periodicamente.
+    let mut fp_counts: HashMap<String, u32> = HashMap::new();
 
     while let Ok(batch) = rx.recv_async().await {
         batch_count += 1;
@@ -68,7 +71,9 @@ pub async fn run_ml(
                 None => continue,
             };
 
-            if score < ANOMALY_THRESHOLD {
+            let ip_threshold = ANOMALY_THRESHOLD
+                + 0.05 * fp_counts.get(&src_ip).copied().unwrap_or(0).min(4) as f64;
+            if score < ip_threshold {
                 continue;
             }
 
@@ -81,7 +86,7 @@ pub async fn run_ml(
                 }
             }
 
-            let severity = if score >= ANOMALY_THRESHOLD + 0.15 {
+            let severity = if score >= ip_threshold + 0.15 {
                 AlertSeverity::Critical
             } else {
                 AlertSeverity::Warning
@@ -126,6 +131,17 @@ pub async fn run_ml(
 
         // Publish status snapshot every 10 batches
         if batch_count.is_multiple_of(10) {
+            if let Ok(rows) = sqlx::query_as::<_, (String, i64)>(
+                "SELECT src_ip, COUNT(*) FROM alert_events \
+                 WHERE alert_type = 'ml_anomaly' AND feedback = 'false_positive' \
+                 GROUP BY src_ip",
+            )
+            .fetch_all(&state.db)
+            .await
+            {
+                fp_counts = rows.into_iter().map(|(ip, n)| (ip, n as u32)).collect();
+            }
+
             let snapshot: Vec<MlModelStatus> = models
                 .iter()
                 .map(|(ip, m)| MlModelStatus {

@@ -27,6 +27,7 @@ const KNOWN_KEYS: &[&str] = &[
     "INTERNAL_PREFIXES",
     // Organização
     "TIMEZONE",
+    "APP_LANGUAGE",
     // Análise
     "FLOW_RETENTION_DAYS",
     "MAX_TOP_TALKERS",
@@ -85,6 +86,13 @@ pub async fn init_settings_table(pool: &SqlitePool) -> anyhow::Result<()> {
             "America/Sao_Paulo",
             "Fuso Horário",
             "Fuso horário para exibição de datas e horas (IANA, ex: America/Sao_Paulo, UTC).",
+            "Organização",
+        ),
+        (
+            "APP_LANGUAGE",
+            "pt-BR",
+            "Idioma",
+            "Idioma das explicações geradas por IA e de textos do sistema (pt-BR, en, es).",
             "Organização",
         ),
         // ── Análise ──────────────────────────────────────────────────────

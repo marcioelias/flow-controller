@@ -160,6 +160,9 @@ pub async fn init_tables(pool: &SqlitePool) -> anyhow::Result<()> {
             .execute(pool)
             .await;
 
+    let _ = sqlx::query("ALTER TABLE alert_events ADD COLUMN feedback TEXT")
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE alert_events ADD COLUMN explanation TEXT")
         .execute(pool)
         .await;

@@ -698,6 +698,10 @@ fn main() -> anyhow::Result<()> {
                 get(alert_api::get_telegram).put(alert_api::update_telegram),
             )
             .route("/api/alerts/telegram/test", post(alert_api::test_telegram))
+            .route(
+                "/api/ml/events/:id/feedback",
+                axum::routing::patch(ml_api::set_event_feedback),
+            )
             .layer(axum_middleware::from_fn(middleware::require_admin));
 
         // Semi-protected routes (require auth but not admin)

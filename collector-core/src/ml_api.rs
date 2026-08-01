@@ -162,7 +162,7 @@ pub async fn get_ml_events(
     let rows = sqlx::query(
         "SELECT id, exporter_ip, src_ip, severity, message,
                 pps, avg_pkt_bytes, upload_bytes, download_bytes,
-                explanation, created_at
+                explanation, feedback, created_at
          FROM alert_events
          WHERE alert_type = 'ml_anomaly'
          ORDER BY id DESC
@@ -188,6 +188,7 @@ pub async fn get_ml_events(
                 "upload_bytes":  r.try_get::<i64,_>("upload_bytes").ok(),
                 "download_bytes":r.try_get::<i64,_>("download_bytes").ok(),
                 "explanation":   r.try_get::<Option<String>,_>("explanation").ok().flatten(),
+                "feedback":      r.try_get::<Option<String>,_>("feedback").ok().flatten(),
                 "created_at":    r.try_get::<Option<String>,_>("created_at").ok().flatten(),
             })
         })
@@ -196,4 +197,33 @@ pub async fn get_ml_events(
     Ok(Json(
         serde_json::json!({ "total": total, "events": events }),
     ))
+}
+
+#[derive(serde::Deserialize)]
+pub struct FeedbackBody {
+    /// "false_positive" | "confirmed" | null (limpa)
+    pub feedback: Option<String>,
+}
+
+/// PATCH /api/ml/events/:id/feedback — feedback do operador (task 15.2).
+/// Falso positivo eleva o threshold daquele IP no detector (ml_runner).
+pub async fn set_event_feedback(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(body): Json<FeedbackBody>,
+) -> Result<StatusCode, StatusCode> {
+    match body.feedback.as_deref() {
+        None | Some("false_positive") | Some("confirmed") => {}
+        _ => return Err(StatusCode::UNPROCESSABLE_ENTITY),
+    }
+    let res = sqlx::query("UPDATE alert_events SET feedback = ? WHERE id = ?")
+        .bind(&body.feedback)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if res.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
