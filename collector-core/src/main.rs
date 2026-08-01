@@ -330,7 +330,7 @@ struct PacketPayload {
 /// waits in the export queue before being drained.
 pub struct FlowWindow {
     pub window_ts: u32,
-    pub map: std::collections::HashMap<AggregationKey, AggregatedMetrics, ahash::RandomState>,
+    pub map: aggregator::SlicedMap,
 }
 
 fn unix_now_secs() -> u32 {
@@ -772,7 +772,7 @@ fn main() -> anyhow::Result<()> {
                     // both = totals would double-count if simply summed
                     let mut dir_seen: std::collections::HashMap<Ipv4Addr, (bool, bool)> =
                         std::collections::HashMap::new();
-                    for (key, m) in map.iter() {
+                    for ((slice_sec, key), m) in map.iter() {
                         window_total_bytes += m.bytes;
                         *per_device_bytes
                             .entry(key.exporter_ip.to_string())
@@ -785,7 +785,9 @@ fn main() -> anyhow::Result<()> {
                             _ => {}
                         }
 
-                        let e = merge.entry((now, *key)).or_default();
+                        // Rows keep the second the traffic happened in, not
+                        // the drain time — retroactive fill is the point.
+                        let e = merge.entry((*slice_sec, *key)).or_default();
                         e.bytes += m.bytes;
                         e.packets += m.packets;
                         e.flow_count += m.flow_count;
@@ -1043,6 +1045,7 @@ fn worker_loop(
                     worker_metrics
                         .flows_decoded
                         .inc_by(parsed_flows.len() as u64);
+                    let now_secs = unix_now_secs();
 
                     for flow in parsed_flows {
                         // Debug Console gets a producer-side sample: without this,
@@ -1080,7 +1083,7 @@ fn worker_loop(
                                 direction: flow.direction,
                             });
                         }
-                        aggregator.aggregate(&flow);
+                        aggregator.aggregate(&flow, now_secs);
                     }
                 }
                 Err(_) => {

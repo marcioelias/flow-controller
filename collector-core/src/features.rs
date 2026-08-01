@@ -1,4 +1,4 @@
-use aggregator::{AggregatedMetrics, AggregationKey};
+use aggregator::SlicedMap;
 use ahash::RandomState;
 use flow_types::{FlowFeatures, IpAddrType};
 use std::collections::{HashMap, HashSet};
@@ -19,17 +19,15 @@ struct IpEntry {
     dst_ports: HashSet<u16, RandomState>,
 }
 
-pub fn extract(
-    window_ts: u32,
-    map: &HashMap<AggregationKey, AggregatedMetrics, RandomState>,
-) -> Vec<FlowFeatures> {
+pub fn extract(window_ts: u32, map: &SlicedMap) -> Vec<FlowFeatures> {
     // Key: (exporter_ip_u32, src_ipv4_u32) — ahash like the rest of the
     // pipeline; the std default (SipHash) costs real time at 100k+ keys
     let mut per_ip: HashMap<(u32, u32), IpEntry, RandomState> =
         HashMap::with_hasher(RandomState::new());
 
-    // Pass 1 — sender perspective (src_ip sent these bytes)
-    for (key, metrics) in map.iter() {
+    // Pass 1 — sender perspective (src_ip sent these bytes). The slice
+    // second is ignored: the ML window is the drained batch as a whole.
+    for ((_sec, key), metrics) in map.iter() {
         let (exporter_u32, src_u32) = match (key.exporter_ip, key.src_ip) {
             (exp, IpAddrType::V4(src)) => (
                 u32::from_be_bytes(exp.octets()),
@@ -60,7 +58,7 @@ pub fn extract(
     }
 
     // Pass 2 — receiver perspective: where src_ip is dst_ip of another entry
-    for (key, metrics) in map.iter() {
+    for ((_sec, key), metrics) in map.iter() {
         let (exporter_u32, dst_u32) = match (key.exporter_ip, key.dst_ip) {
             (exp, IpAddrType::V4(dst)) => (
                 u32::from_be_bytes(exp.octets()),
