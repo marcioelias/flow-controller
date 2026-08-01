@@ -34,14 +34,17 @@ pub async fn run_enforcer(state: Arc<AppState>) {
     loop {
         tokio::time::sleep(Duration::from_secs(CHECK_SECS)).await;
 
-        // Expiração em runtime — o boot valida uma vez; aqui rebaixa sem restart
-        let expired = {
-            let lic = state.license.read().unwrap();
-            lic.valid && license::is_expired(lic.expires_at.as_deref())
-        };
-        if expired {
-            tracing::warn!("License expired — downgrading to free tier");
-            *state.license.write().unwrap() = license::free_tier();
+        // O arquivo é a fonte de verdade: remoção, troca ou expiração passam a
+        // valer em runtime (≤60s), sem restart. Efeito colateral aceito: uma
+        // licença aplicada via API cujo write em disco falhou será revertida
+        // aqui — o POST já loga warn nesse caso.
+        let fresh = license::load_and_validate("/etc/flow-collector/license.key");
+        {
+            let mut lic = state.license.write().unwrap();
+            if lic.tier_label != fresh.tier_label || lic.valid != fresh.valid {
+                tracing::warn!("License state changed on disk: {}", fresh.tier_label);
+                *lic = fresh;
+            }
         }
 
         let max_bps = { state.license.read().unwrap().max_bps };

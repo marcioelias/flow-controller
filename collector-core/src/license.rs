@@ -264,18 +264,6 @@ pub fn validate_license_string(license_str: &str) -> LicenseStatus {
     }
 }
 
-/// True quando a data (YYYY-MM-DD) já passou. Datas inválidas contam como
-/// expiradas — licença malformada não deve conceder acesso.
-pub fn is_expired(expires_at: Option<&str>) -> bool {
-    match expires_at {
-        None => false,
-        Some(exp) => match chrono::NaiveDate::parse_from_str(exp, "%Y-%m-%d") {
-            Ok(d) => d < chrono::Utc::now().date_naive(),
-            Err(_) => true,
-        },
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
