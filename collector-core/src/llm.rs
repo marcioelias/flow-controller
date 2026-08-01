@@ -250,3 +250,78 @@ fn row_to_event(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<AlertEvent> {
         created_at: row.try_get("created_at")?,
     })
 }
+
+// ── Endpoints de suporte à configuração guiada (task 15.4) ──────────────────
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::Json;
+use std::sync::Arc;
+
+#[derive(serde::Deserialize)]
+pub struct LlmProbeBody {
+    pub endpoint: String,
+    /// Necessário só para o teste de geração
+    pub model: Option<String>,
+}
+
+/// POST /api/llm/models — lista os modelos disponíveis no endpoint informado
+/// (proxy de GET /api/tags do Ollama; o navegador não alcança o Ollama direto)
+pub async fn list_models_handler(
+    State(_state): State<Arc<crate::auth::AppState>>,
+    Json(body): Json<LlmProbeBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let resp = client
+        .get(format!("{}/api/tags", body.endpoint.trim_end_matches('/')))
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let val: serde_json::Value = resp.json().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let models: Vec<String> = val["models"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Json(serde_json::json!({ "models": models })))
+}
+
+/// POST /api/llm/test — gera uma frase curta para validar endpoint+modelo
+pub async fn test_llm_handler(
+    State(state): State<Arc<crate::auth::AppState>>,
+    Json(body): Json<LlmProbeBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let Some(model) = body.model else {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    };
+    let language = crate::settings::get_value(&state.db, "APP_LANGUAGE")
+        .await
+        .unwrap_or_else(|| "pt-BR".to_string());
+    let client = LlmClient {
+        language: language.clone(),
+        endpoint: body.endpoint,
+        model,
+        client: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    };
+    let prompt = format!(
+        "Reply with one short sentence in {} confirming you are ready to explain          network anomalies.",
+        language_name(&language)
+    );
+    match client.generate(&prompt).await {
+        Ok(text) => Ok(Json(
+            serde_json::json!({ "ok": true, "response": text.trim() }),
+        )),
+        Err(e) => Ok(Json(
+            serde_json::json!({ "ok": false, "error": e.to_string() }),
+        )),
+    }
+}

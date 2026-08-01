@@ -702,6 +702,8 @@ fn main() -> anyhow::Result<()> {
                 "/api/ml/events/:id/feedback",
                 axum::routing::patch(ml_api::set_event_feedback),
             )
+            .route("/api/llm/models", post(llm::list_models_handler))
+            .route("/api/llm/test", post(llm::test_llm_handler))
             .layer(axum_middleware::from_fn(middleware::require_admin));
 
         // Semi-protected routes (require auth but not admin)
