@@ -73,6 +73,10 @@ use template_cache::ThreadLocalTemplateCache;
 pub struct LiveFlowStats {
     pub timestamp_sec: u32,
     pub total_bytes: u64,
+    /// Bytes with direction = ingress; flows sem IE 61 caem aqui por convenção
+    pub bytes_in: u64,
+    /// Bytes with direction = egress
+    pub bytes_out: u64,
     pub per_device: std::collections::HashMap<String, u64>,
 }
 
@@ -766,6 +770,8 @@ fn main() -> anyhow::Result<()> {
                     // Live dashboard stays at 1s cadence: broadcast per window,
                     // before merging
                     let mut window_total_bytes = 0;
+                    let mut window_bytes_in = 0u64;
+                    let mut window_bytes_out = 0u64;
                     let mut per_device_bytes: std::collections::HashMap<String, u64> =
                         std::collections::HashMap::new();
                     // Which directions each exporter reported this window —
@@ -780,9 +786,15 @@ fn main() -> anyhow::Result<()> {
 
                         let seen = dir_seen.entry(key.exporter_ip).or_default();
                         match key.direction {
-                            flow_types::DIRECTION_INGRESS => seen.0 = true,
-                            flow_types::DIRECTION_EGRESS => seen.1 = true,
-                            _ => {}
+                            flow_types::DIRECTION_INGRESS => {
+                                seen.0 = true;
+                                window_bytes_in += m.bytes;
+                            }
+                            flow_types::DIRECTION_EGRESS => {
+                                seen.1 = true;
+                                window_bytes_out += m.bytes;
+                            }
+                            _ => window_bytes_in += m.bytes,
                         }
 
                         // Rows keep the second the traffic happened in, not
@@ -801,6 +813,8 @@ fn main() -> anyhow::Result<()> {
                     let _ = ws_tx.send(LiveFlowStats {
                         timestamp_sec: now,
                         total_bytes: window_total_bytes,
+                        bytes_in: window_bytes_in,
+                        bytes_out: window_bytes_out,
                         per_device: per_device_bytes,
                     });
 
