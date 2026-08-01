@@ -69,6 +69,15 @@ use aggregator::{AggregatedMetrics, AggregationKey, ThreadLocalAggregator};
 use netflow_parser::parse_packet;
 use template_cache::ThreadLocalTemplateCache;
 
+/// Volume de um segundo específico dentro da janela drenada — permite ao
+/// frontend preencher o gráfico retroativamente com a taxa real (task 13.6)
+#[derive(Serialize, Clone, Debug)]
+pub struct LiveSlice {
+    pub sec: u32,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct LiveFlowStats {
     pub timestamp_sec: u32,
@@ -81,6 +90,8 @@ pub struct LiveFlowStats {
     /// Split por exporter para o espelho por dispositivo no dashboard
     pub per_device_in: std::collections::HashMap<String, u64>,
     pub per_device_out: std::collections::HashMap<String, u64>,
+    /// Fatias por segundo (globais) — taxa real, não arrival
+    pub slices: Vec<LiveSlice>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -781,12 +792,22 @@ fn main() -> anyhow::Result<()> {
                         std::collections::HashMap::new();
                     let mut per_device_out: std::collections::HashMap<String, u64> =
                         std::collections::HashMap::new();
+                    let mut slice_totals: std::collections::BTreeMap<u32, (u64, u64)> =
+                        std::collections::BTreeMap::new();
                     // Which directions each exporter reported this window —
                     // both = totals would double-count if simply summed
                     let mut dir_seen: std::collections::HashMap<Ipv4Addr, (bool, bool)> =
                         std::collections::HashMap::new();
                     for ((slice_sec, key), m) in map.iter() {
                         window_total_bytes += m.bytes;
+                        {
+                            let t = slice_totals.entry(*slice_sec).or_default();
+                            if key.direction == flow_types::DIRECTION_EGRESS {
+                                t.1 += m.bytes;
+                            } else {
+                                t.0 += m.bytes;
+                            }
+                        }
                         *per_device_bytes
                             .entry(key.exporter_ip.to_string())
                             .or_insert(0) += m.bytes;
@@ -836,6 +857,14 @@ fn main() -> anyhow::Result<()> {
                         per_device: per_device_bytes,
                         per_device_in,
                         per_device_out,
+                        slices: slice_totals
+                            .into_iter()
+                            .map(|(sec, (bi, bo))| LiveSlice {
+                                sec,
+                                bytes_in: bi,
+                                bytes_out: bo,
+                            })
+                            .collect(),
                     });
 
                     if merge.len() < EXPORT_MAX_ROWS {

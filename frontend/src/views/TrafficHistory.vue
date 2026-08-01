@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import { COLOR_IN, COLOR_OUT, COLOR_UNKNOWN, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks } from '../lib/chartTheme'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -51,11 +52,6 @@ const hourOptions = [
   { label: 'Últimas 24h', value: 24 },
 ]
 
-// Series colors — validated pair on the zinc-900 surface (dataviz palette,
-// dark slots 1/2); unknown band is deliberately neutral
-const COLOR_IN = '#3987e5'
-const COLOR_OUT = '#d95926'
-const COLOR_UNKNOWN = '#a1a1aa'
 
 function toMbps(bytes: number): number {
   return (bytes * 8) / 1e6 / 60
@@ -85,9 +81,9 @@ const lineChartData = computed(() => {
       labels,
       datasets: [
         {
-          label: 'Tráfego (Mbps)',
-          borderColor: '#10b981',
-          backgroundColor: 'rgba(16,185,129,0.1)',
+          label: 'Tráfego',
+          borderColor: COLOR_IN,
+          backgroundColor: withAlpha(COLOR_IN, '1a'),
           borderWidth: 2,
           data: points.value.map((p) => +toMbps(p.total_bytes).toFixed(3)),
           tension: 0,
@@ -101,9 +97,9 @@ const lineChartData = computed(() => {
 
   const datasets: any[] = [
     {
-      label: 'Entrada (Mbps)',
+      label: 'Entrada',
       borderColor: COLOR_IN,
-      backgroundColor: 'rgba(57,135,229,0.15)',
+      backgroundColor: withAlpha(COLOR_IN, '26'),
       borderWidth: 2,
       // mirrored: inbound above the axis
       data: points.value.map((p) => +toMbps(p.in_bytes).toFixed(3)),
@@ -113,9 +109,9 @@ const lineChartData = computed(() => {
       pointHoverRadius: 4,
     },
     {
-      label: 'Saída (Mbps)',
+      label: 'Saída',
       borderColor: COLOR_OUT,
-      backgroundColor: 'rgba(217,89,38,0.15)',
+      backgroundColor: withAlpha(COLOR_OUT, '26'),
       borderWidth: 2,
       // mirrored: outbound below the axis (negated; labels use abs)
       data: points.value.map((p) => -toMbps(p.out_bytes).toFixed(3)),
@@ -128,9 +124,9 @@ const lineChartData = computed(() => {
 
   if (hasUnknown.value) {
     datasets.push({
-      label: 'Sem direção (Mbps)',
+      label: 'Sem direção',
       borderColor: COLOR_UNKNOWN,
-      backgroundColor: 'rgba(161,161,170,0.08)',
+      backgroundColor: withAlpha(COLOR_UNKNOWN, '14'),
       borderWidth: 1.5,
       borderDash: [4, 3],
       data: points.value.map((p) => +toMbps(p.unknown_bytes).toFixed(3)),
@@ -150,16 +146,8 @@ const lineChartOptions = computed(() => ({
   animation: { duration: 0 },
   interaction: { mode: 'index' as const, intersect: false },
   plugins: {
-    legend: {
-      display: hasDirection.value,
-      labels: { color: '#9ca3af', usePointStyle: true, boxHeight: 6 },
-    },
-    tooltip: {
-      callbacks: {
-        // outbound is plotted negative — always show absolute values
-        label: (ctx: any) => ` ${ctx.dataset.label}: ${Math.abs(ctx.parsed.y).toFixed(2)} Mbps`,
-      },
-    },
+    legend: { ...mirroredLegend, display: hasDirection.value },
+    tooltip: mirroredTooltip,
   },
   scales: {
     x: {
@@ -167,11 +155,7 @@ const lineChartOptions = computed(() => ({
       grid: { display: false },
     },
     y: {
-      ticks: {
-        color: '#9ca3af',
-        // never show a negative byte label on the mirrored axis
-        callback: (v: any) => Math.abs(v).toFixed(1) + ' Mbps',
-      },
+      ticks: mirroredYTicks(),
       grid: {
         color: (ctx: any) => (ctx.tick.value === 0 ? '#52525b' : '#374151'),
       },

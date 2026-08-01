@@ -13,15 +13,12 @@ import {
   Gauge, Zap, Users, Bell, Radio, Flame,
 } from 'lucide-vue-next'
 import { formatBytes } from '../utils/format'
+import { COLOR_IN, COLOR_OUT, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks } from '../lib/chartTheme'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler)
 
 const authStore = useAuthStore()
 const router = useRouter()
-
-// Series colors — validated pair on zinc-900 (dataviz palette dark slots 1/2)
-const COLOR_IN = '#3987e5'
-const COLOR_OUT = '#d95926'
 
 interface Exporter { id: number; ip_address: string; name: string; enabled: boolean }
 interface ExporterStat {
@@ -55,11 +52,21 @@ const heatmapMax = ref(0)
 // live stats
 const liveTotalBps = ref(0)
 
-let chartLabels: string[] = []
-let chartInPoints: number[] = []
-let chartOutPoints: number[] = []
-let lastInMbps = 0
-let lastOutMbps = 0
+// Buckets por segundo epoch (janela de 5 min). Fatias do WS somam no segundo
+// a que pertencem — inclusive retroativamente, conforme flows expiram no
+// exporter. Taxa real, não arrival (task 13.6).
+const LIVE_WINDOW_SECS = 300
+const liveBuckets = new Map<number, { inB: number; outB: number }>()
+
+function bucketAdd(sec: number, inB: number, outB: number) {
+  const b = liveBuckets.get(sec)
+  if (b) {
+    b.inB += inB
+    b.outB += outB
+  } else {
+    liveBuckets.set(sec, { inB, outB })
+  }
+}
 
 // Espelho NOC: entrada acima do eixo, saída abaixo (negativa).
 // tension 0 — tráfego de rede não é suave; curva esconde microburst.
@@ -67,7 +74,7 @@ function liveDatasets(inData: number[], outData: number[]) {
   return [
     {
       label: 'Entrada',
-      backgroundColor: COLOR_IN + '14',
+      backgroundColor: withAlpha(COLOR_IN, '26'),
       borderColor: COLOR_IN,
       borderWidth: 2,
       data: inData,
@@ -78,7 +85,7 @@ function liveDatasets(inData: number[], outData: number[]) {
     },
     {
       label: 'Saída',
-      backgroundColor: COLOR_OUT + '14',
+      backgroundColor: withAlpha(COLOR_OUT, '26'),
       borderColor: COLOR_OUT,
       borderWidth: 2,
       data: outData,
@@ -106,12 +113,8 @@ const chartOptions = {
   animation: { duration: 0 },
   interaction: { mode: 'index' as const, intersect: false },
   plugins: {
-    legend: { display: true, labels: { color: '#9ca3af', boxWidth: 10, padding: 12 } },
-    tooltip: {
-      callbacks: {
-        label: (c: any) => ` ${c.dataset.label}: ${Math.abs(c.parsed.y).toFixed(2)} Mbps`,
-      },
-    },
+    legend: mirroredLegend,
+    tooltip: mirroredTooltip,
   },
   scales: {
     x: {
@@ -119,9 +122,8 @@ const chartOptions = {
       grid: { display: false },
     },
     y: {
-      // Saída é plotada negativa — o rótulo mostra o valor absoluto
-      ticks: { color: '#6b7280', callback: (v: any) => Math.abs(v).toFixed(1) },
-      grid: { color: '#27272a' },
+      ticks: mirroredYTicks('#6b7280'),
+      grid: { color: (ctx: any) => (ctx.tick.value === 0 ? '#52525b' : '#27272a') },
     },
   },
 }
@@ -165,8 +167,7 @@ function exporterName(ip: string) {
 
 function selectDevice(ip: string | null) {
   selectedDevice.value = ip
-  lastInMbps = 0
-  lastOutMbps = 0
+  liveBuckets.clear()
   loadProtocolStats()
 }
 
@@ -275,20 +276,34 @@ function formatAlertTime(ts: string) {
 }
 
 function updateChart() {
-  const timeLabel = new Date().toTimeString().slice(0, 8)
-  chartLabels.push(timeLabel)
-  chartInPoints.push(lastInMbps)
-  chartOutPoints.push(-lastOutMbps)
-  if (chartLabels.length > 150) {
-    chartLabels.shift()
-    chartInPoints.shift()
-    chartOutPoints.shift()
+  const nowSec = Math.floor(Date.now() / 1000)
+  const first = nowSec - LIVE_WINDOW_SECS
+
+  for (const sec of liveBuckets.keys()) {
+    if (sec < first) liveBuckets.delete(sec)
   }
 
-  lineChartData.value = {
-    labels: [...chartLabels],
-    datasets: liveDatasets([...chartInPoints], [...chartOutPoints]),
+  const labels: string[] = []
+  const inData: number[] = []
+  const outData: number[] = []
+  let recentIn = 0
+  let recentOut = 0
+  for (let sec = first; sec < nowSec; sec++) {
+    labels.push(new Date(sec * 1000).toTimeString().slice(0, 8))
+    const b = liveBuckets.get(sec)
+    const inMbps = b ? (b.inB * 8) / 1_000_000 : 0
+    const outMbps = b ? (b.outB * 8) / 1_000_000 : 0
+    inData.push(inMbps)
+    outData.push(-outMbps)
+    if (sec >= nowSec - 10) {
+      recentIn += inMbps
+      recentOut += outMbps
+    }
   }
+  // "agora" = média dos últimos 10s — sobe conforme o retroativo preenche
+  liveTotalBps.value = (recentIn + recentOut) / 10
+
+  lineChartData.value = { labels, datasets: liveDatasets(inData, outData) }
 }
 
 let ws: WebSocket | null = null
@@ -304,15 +319,19 @@ function connectWs() {
     try {
       const stats = JSON.parse(e.data)
       if (!stats.timestamp_sec) return
-      const bytesIn = selectedDevice.value
-        ? (stats.per_device_in?.[selectedDevice.value] ?? 0)
-        : (stats.bytes_in ?? 0)
-      const bytesOut = selectedDevice.value
-        ? (stats.per_device_out?.[selectedDevice.value] ?? 0)
-        : (stats.bytes_out ?? 0)
-      lastInMbps = (bytesIn * 8) / 1_000_000
-      lastOutMbps = (bytesOut * 8) / 1_000_000
-      liveTotalBps.value = lastInMbps + lastOutMbps
+      if (selectedDevice.value) {
+        // Fatias são globais; com filtro de dispositivo o gráfico volta a ser
+        // arrival-based (limitação registrada na task 13.6)
+        bucketAdd(
+          stats.timestamp_sec,
+          stats.per_device_in?.[selectedDevice.value] ?? 0,
+          stats.per_device_out?.[selectedDevice.value] ?? 0,
+        )
+      } else if (Array.isArray(stats.slices)) {
+        for (const sl of stats.slices) {
+          bucketAdd(sl.sec, sl.bytes_in ?? 0, sl.bytes_out ?? 0)
+        }
+      }
     } catch {}
   }
   ws.onclose = () => setTimeout(connectWs, 3000)
@@ -331,7 +350,7 @@ onMounted(() => {
   connectWs()
   overviewTimer = setInterval(() => { if (visible()) { loadOverview(); loadTopTalkers(); loadRecentAlerts() } }, 10_000)
   pollTimer = setInterval(() => { if (visible()) { loadExporters(); loadProtocolStats(); loadExporterStats(); loadHeatmap() } }, 60_000)
-  chartTimer = setInterval(updateChart, 2000)
+  chartTimer = setInterval(updateChart, 1000)
 })
 
 onUnmounted(() => {
@@ -488,7 +507,7 @@ onUnmounted(() => {
             <div>
               <h2 class="text-base font-semibold text-slate-200">Tráfego em tempo real</h2>
               <p class="text-xs text-zinc-500 mt-0.5">
-                {{ liveTotalBps.toFixed(1) }} Mbps agora — últimos 5 minutos
+                {{ liveTotalBps.toFixed(1) }} Mbps (média 10s) — preenche retroativo conforme flows expiram
               </p>
             </div>
             <span class="relative flex h-2 w-2">
