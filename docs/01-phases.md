@@ -342,6 +342,7 @@ tráfego como ele realmente aconteceu.
 | 13.8 Timestamps IPFIX relativos (IE 21/22 + IE 160) | `tasks/task-13.8-ipfix-sysuptime.md` | ✅ |
 | 13.9 Espelho empilhado por família + stats 95% | `tasks/task-13.9-stacked-family.md` | ✅ |
 | 13.10 Janela ao vivo persistente entre views | `tasks/task-13.10-live-persistence.md` | ✅ |
+| 13.11 Features do ML por segundo real | `tasks/task-13.11-ml-per-second-features.md` | ✅ |
 
 Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 

@@ -781,7 +781,7 @@ fn main() -> anyhow::Result<()> {
                     // per merged batch.
                     let feat_map = Arc::clone(&map);
                     let ml_features =
-                        tokio::task::spawn_blocking(move || features::extract(now, &feat_map))
+                        tokio::task::spawn_blocking(move || features::extract(&feat_map))
                             .await
                             .unwrap_or_default();
                     if !ml_features.is_empty() && ml_tx_ch.try_send(ml_features).is_err() {
