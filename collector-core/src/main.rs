@@ -78,6 +78,9 @@ pub struct LiveFlowStats {
     /// Bytes with direction = egress
     pub bytes_out: u64,
     pub per_device: std::collections::HashMap<String, u64>,
+    /// Split por exporter para o espelho por dispositivo no dashboard
+    pub per_device_in: std::collections::HashMap<String, u64>,
+    pub per_device_out: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -774,6 +777,10 @@ fn main() -> anyhow::Result<()> {
                     let mut window_bytes_out = 0u64;
                     let mut per_device_bytes: std::collections::HashMap<String, u64> =
                         std::collections::HashMap::new();
+                    let mut per_device_in: std::collections::HashMap<String, u64> =
+                        std::collections::HashMap::new();
+                    let mut per_device_out: std::collections::HashMap<String, u64> =
+                        std::collections::HashMap::new();
                     // Which directions each exporter reported this window —
                     // both = totals would double-count if simply summed
                     let mut dir_seen: std::collections::HashMap<Ipv4Addr, (bool, bool)> =
@@ -789,12 +796,23 @@ fn main() -> anyhow::Result<()> {
                             flow_types::DIRECTION_INGRESS => {
                                 seen.0 = true;
                                 window_bytes_in += m.bytes;
+                                *per_device_in
+                                    .entry(key.exporter_ip.to_string())
+                                    .or_insert(0) += m.bytes;
                             }
                             flow_types::DIRECTION_EGRESS => {
                                 seen.1 = true;
                                 window_bytes_out += m.bytes;
+                                *per_device_out
+                                    .entry(key.exporter_ip.to_string())
+                                    .or_insert(0) += m.bytes;
                             }
-                            _ => window_bytes_in += m.bytes,
+                            _ => {
+                                window_bytes_in += m.bytes;
+                                *per_device_in
+                                    .entry(key.exporter_ip.to_string())
+                                    .or_insert(0) += m.bytes;
+                            }
                         }
 
                         // Rows keep the second the traffic happened in, not
@@ -816,6 +834,8 @@ fn main() -> anyhow::Result<()> {
                         bytes_in: window_bytes_in,
                         bytes_out: window_bytes_out,
                         per_device: per_device_bytes,
+                        per_device_in,
+                        per_device_out,
                     });
 
                     if merge.len() < EXPORT_MAX_ROWS {

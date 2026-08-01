@@ -56,22 +56,43 @@ const heatmapMax = ref(0)
 const liveTotalBps = ref(0)
 
 let chartLabels: string[] = []
-let chartDataPoints: number[] = []
-let lastTrafficValue = 0
+let chartInPoints: number[] = []
+let chartOutPoints: number[] = []
+let lastInMbps = 0
+let lastOutMbps = 0
+
+// Espelho NOC: entrada acima do eixo, saída abaixo (negativa).
+// tension 0 — tráfego de rede não é suave; curva esconde microburst.
+function liveDatasets(inData: number[], outData: number[]) {
+  return [
+    {
+      label: 'Entrada',
+      backgroundColor: COLOR_IN + '14',
+      borderColor: COLOR_IN,
+      borderWidth: 2,
+      data: inData,
+      tension: 0,
+      fill: 'origin',
+      pointRadius: 0,
+      pointHoverRadius: 4,
+    },
+    {
+      label: 'Saída',
+      backgroundColor: COLOR_OUT + '14',
+      borderColor: COLOR_OUT,
+      borderWidth: 2,
+      data: outData,
+      tension: 0,
+      fill: 'origin',
+      pointRadius: 0,
+      pointHoverRadius: 4,
+    },
+  ]
+}
 
 const lineChartData = ref({
   labels: [] as string[],
-  datasets: [{
-    label: 'Mbps',
-    backgroundColor: 'rgba(16,185,129,0.08)',
-    borderColor: '#10b981',
-    borderWidth: 2,
-    data: [] as number[],
-    tension: 0.4,
-    fill: true,
-    pointRadius: 0,
-    pointHoverRadius: 4,
-  }],
+  datasets: liveDatasets([], []),
 })
 
 const donutChartData = ref({
@@ -85,8 +106,12 @@ const chartOptions = {
   animation: { duration: 0 },
   interaction: { mode: 'index' as const, intersect: false },
   plugins: {
-    legend: { display: false },
-    tooltip: { callbacks: { label: (c: any) => ` ${c.parsed.y.toFixed(2)} Mbps` } },
+    legend: { display: true, labels: { color: '#9ca3af', boxWidth: 10, padding: 12 } },
+    tooltip: {
+      callbacks: {
+        label: (c: any) => ` ${c.dataset.label}: ${Math.abs(c.parsed.y).toFixed(2)} Mbps`,
+      },
+    },
   },
   scales: {
     x: {
@@ -94,9 +119,9 @@ const chartOptions = {
       grid: { display: false },
     },
     y: {
-      ticks: { color: '#6b7280', callback: (v: any) => v.toFixed(1) },
+      // Saída é plotada negativa — o rótulo mostra o valor absoluto
+      ticks: { color: '#6b7280', callback: (v: any) => Math.abs(v).toFixed(1) },
       grid: { color: '#27272a' },
-      beginAtZero: true,
     },
   },
 }
@@ -140,7 +165,8 @@ function exporterName(ip: string) {
 
 function selectDevice(ip: string | null) {
   selectedDevice.value = ip
-  lastTrafficValue = 0
+  lastInMbps = 0
+  lastOutMbps = 0
   loadProtocolStats()
 }
 
@@ -251,22 +277,17 @@ function formatAlertTime(ts: string) {
 function updateChart() {
   const timeLabel = new Date().toTimeString().slice(0, 8)
   chartLabels.push(timeLabel)
-  chartDataPoints.push(lastTrafficValue)
-  if (chartLabels.length > 150) { chartLabels.shift(); chartDataPoints.shift() }
+  chartInPoints.push(lastInMbps)
+  chartOutPoints.push(-lastOutMbps)
+  if (chartLabels.length > 150) {
+    chartLabels.shift()
+    chartInPoints.shift()
+    chartOutPoints.shift()
+  }
 
   lineChartData.value = {
     labels: [...chartLabels],
-    datasets: [{
-      label: 'Mbps',
-      backgroundColor: 'rgba(16,185,129,0.08)',
-      borderColor: '#10b981',
-      borderWidth: 2,
-      data: [...chartDataPoints],
-      tension: 0.4,
-      fill: true,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-    }],
+    datasets: liveDatasets([...chartInPoints], [...chartOutPoints]),
   }
 }
 
@@ -283,11 +304,15 @@ function connectWs() {
     try {
       const stats = JSON.parse(e.data)
       if (!stats.timestamp_sec) return
-      const bytes = selectedDevice.value
-        ? (stats.per_device?.[selectedDevice.value] ?? 0)
-        : (stats.total_bytes ?? 0)
-      lastTrafficValue = (bytes * 8) / 1_000_000
-      liveTotalBps.value = lastTrafficValue
+      const bytesIn = selectedDevice.value
+        ? (stats.per_device_in?.[selectedDevice.value] ?? 0)
+        : (stats.bytes_in ?? 0)
+      const bytesOut = selectedDevice.value
+        ? (stats.per_device_out?.[selectedDevice.value] ?? 0)
+        : (stats.bytes_out ?? 0)
+      lastInMbps = (bytesIn * 8) / 1_000_000
+      lastOutMbps = (bytesOut * 8) / 1_000_000
+      liveTotalBps.value = lastInMbps + lastOutMbps
     } catch {}
   }
   ws.onclose = () => setTimeout(connectWs, 3000)
@@ -363,7 +388,10 @@ onUnmounted(() => {
       <div v-if="overview" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Entrada</span>
+            <span
+              class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider cursor-help"
+              title="Flows chegam quando o exporter os expira (active timeout). Picos recentes podem levar até esse intervalo para aparecer — os valores se completam retroativamente."
+            >Entrada</span>
             <ArrowDown class="w-3.5 h-3.5" :style="{ color: COLOR_IN }" />
           </div>
           <p class="text-xl font-bold text-slate-100 tabular-nums leading-tight">{{ formatBps(overview.current_bps_in) }}</p>
@@ -372,7 +400,10 @@ onUnmounted(() => {
 
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Saída</span>
+            <span
+              class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider cursor-help"
+              title="Flows chegam quando o exporter os expira (active timeout). Picos recentes podem levar até esse intervalo para aparecer — os valores se completam retroativamente."
+            >Saída</span>
             <ArrowUp class="w-3.5 h-3.5" :style="{ color: COLOR_OUT }" />
           </div>
           <p class="text-xl font-bold text-slate-100 tabular-nums leading-tight">{{ formatBps(overview.current_bps_out) }}</p>
@@ -381,7 +412,10 @@ onUnmounted(() => {
 
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Pico 5 min</span>
+            <span
+              class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider cursor-help"
+              title="Flows chegam quando o exporter os expira (active timeout). Picos recentes podem levar até esse intervalo para aparecer — os valores se completam retroativamente."
+            >Pico 5 min</span>
             <Zap class="w-3.5 h-3.5 text-amber-400" />
           </div>
           <p class="text-xl font-bold text-slate-100 tabular-nums leading-tight">{{ formatBps(overview.peak_bps_5m) }}</p>
