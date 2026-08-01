@@ -57,6 +57,12 @@ onMounted(async () => {
 })
 
 onUnmounted(() => { if (timer) clearInterval(timer) })
+
+function formatPps(pps: number): string {
+  if (pps >= 1e6) return (pps / 1e6).toFixed(1) + ' Mpps'
+  if (pps >= 1e3) return (pps / 1e3).toFixed(1) + ' kpps'
+  return pps.toFixed(0) + ' pps'
+}
 </script>
 
 <template>
@@ -222,7 +228,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
                 </span>
               </td>
               <td class="px-4 py-2.5 text-xs text-zinc-400">
-                {{ ev.pps != null ? ev.pps.toFixed(0) : '—' }}
+                {{ ev.pps != null ? formatPps(ev.pps) : '—' }}
               </td>
               <td class="px-4 py-2.5 text-xs max-w-xs">
                 <div v-if="ev.explanation" class="text-zinc-300 line-clamp-2" :title="ev.explanation">
