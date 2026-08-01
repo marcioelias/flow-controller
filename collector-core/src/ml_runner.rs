@@ -39,6 +39,10 @@ pub async fn run_ml(
     // Falsos positivos marcados pelo operador elevam o threshold daquele IP
     // (task 15.2): +0.05 por FP, teto de +0.20. Recarregado periodicamente.
     let mut fp_counts: HashMap<String, u32> = HashMap::new();
+    // Piso de significância (task 15.5): desvio estatístico só vira alerta
+    // quando o volume justifica atenção humana — 5 pps anômalos são ruído.
+    let mut min_pps: f64 = 100.0;
+    let mut min_bps: f64 = 1_000_000.0;
 
     while let Ok(batch) = rx.recv_async().await {
         batch_count += 1;
@@ -70,6 +74,11 @@ pub async fn run_ml(
                 Some(s) => s,
                 None => continue,
             };
+
+            // Abaixo dos dois pisos: aprende (já está no buffer), não alerta
+            if feat.pps < min_pps && feat.bps < min_bps {
+                continue;
+            }
 
             let ip_threshold = ANOMALY_THRESHOLD
                 + 0.05 * fp_counts.get(&src_ip).copied().unwrap_or(0).min(4) as f64;
@@ -140,6 +149,16 @@ pub async fn run_ml(
             .await
             {
                 fp_counts = rows.into_iter().map(|(ip, n)| (ip, n as u32)).collect();
+            }
+            if let Some(v) = crate::settings::get_value(&state.db, "ML_MIN_PPS").await {
+                if let Ok(n) = v.parse::<f64>() {
+                    min_pps = n;
+                }
+            }
+            if let Some(v) = crate::settings::get_value(&state.db, "ML_MIN_BPS").await {
+                if let Ok(n) = v.parse::<f64>() {
+                    min_bps = n;
+                }
             }
 
             let snapshot: Vec<MlModelStatus> = models

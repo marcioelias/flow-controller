@@ -364,6 +364,7 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 | 15.2 Feedback → aprendizado do detector (threshold por IP) | `tasks/task-15.2-ml-feedback.md` | ✅ |
 | 15.3 Idioma das explicações IA (APP_LANGUAGE) | `tasks/task-15.3-llm-language.md` | ✅ |
 | 15.4 Reforma da tela de Configurações (abas + CRUD + IA guiada) | `tasks/task-15.4-settings-redesign.md` | ✅ |
+| 15.5 Piso de significância para anomalias ML | `tasks/task-15.5-ml-significance-floor.md` | ✅ |
 
 ---
 

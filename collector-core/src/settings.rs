@@ -43,6 +43,8 @@ const KNOWN_KEYS: &[&str] = &[
     "COLLECTOR_WORKERS",
     "COLLECTOR_RECEIVERS",
     // IA
+    "ML_MIN_PPS",
+    "ML_MIN_BPS",
     "LLM_ENABLED",
     "LLM_ENDPOINT",
     "LLM_MODEL",
@@ -175,6 +177,21 @@ pub async fn init_settings_table(pool: &SqlitePool) -> anyhow::Result<()> {
             "Coletor",
         ),
         // ── IA / ML ──────────────────────────────────────────────────────
+        (
+            "ML_MIN_PPS",
+            "100",
+            "Piso de PPS para anomalias ML",
+            "Anomalia estatística só vira alerta se a taxa exceder este PPS \
+             ou o piso de bps — evita ruído de baixo volume.",
+            "IA",
+        ),
+        (
+            "ML_MIN_BPS",
+            "1000000",
+            "Piso de bps para anomalias ML",
+            "Segundo piso de significância (bits/s). Padrão 1 Mbps.",
+            "IA",
+        ),
         (
             "LLM_ENABLED",
             "false",

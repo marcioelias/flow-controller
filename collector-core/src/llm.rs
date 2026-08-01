@@ -138,15 +138,28 @@ fn build_prompt(ev: &AlertEvent, language: &str) -> String {
             ev.avg_pkt_bytes.unwrap_or(0.0),
             ev.attack_ports.as_deref().unwrap_or("unknown"),
         ),
-        "ml_anomaly" => format!(
-            "alert_type=ml_anomaly src_ip={} pps={:.0} avg_pkt_bytes={:.0} detail={}. \
-             Isolation Forest model detected a statistical anomaly in this IP's traffic profile \
-             compared to its learned baseline.",
-            ev.src_ip,
-            ev.pps.unwrap_or(0.0),
-            ev.avg_pkt_bytes.unwrap_or(0.0),
-            ev.message,
-        ),
+        "ml_anomaly" => {
+            let pps = ev.pps.unwrap_or(0.0);
+            // O modelo tende a papaguear "high packet rate" para qualquer
+            // anomalia — classificar a taxa aqui impede a alucinação
+            let rate_class = if pps < 100.0 {
+                "LOW volume — the anomaly is behavioral (pattern deviation), NOT volume"
+            } else if pps < 10_000.0 {
+                "MODERATE volume"
+            } else {
+                "HIGH volume"
+            };
+            format!(
+                "alert_type=ml_anomaly src_ip={} pps={:.0} ({rate_class}) avg_pkt_bytes={:.0} \
+                 detail={}. Isolation Forest model detected a statistical anomaly in this IP's \
+                 traffic profile compared to its learned baseline. Describe the traffic rate \
+                 accurately — never call a low rate high.",
+                ev.src_ip,
+                pps,
+                ev.avg_pkt_bytes.unwrap_or(0.0),
+                ev.message,
+            )
+        }
         other => format!(
             "alert_type={other} src_ip={} message={}",
             ev.src_ip, ev.message
