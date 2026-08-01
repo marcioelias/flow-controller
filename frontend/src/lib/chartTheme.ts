@@ -1,9 +1,11 @@
 // Tema único dos gráficos de tráfego (ao vivo + histórico).
-// Par validado via dataviz validate_palette na surface dark (zinc-900):
-// deutan ΔE 10.2, banda de luminosidade OK, contraste ≥ 3:1.
-export const COLOR_IN = '#059669' // entrada — verde do sistema (emerald-600)
-export const COLOR_OUT = '#d95926' // saída — laranja
+// Pares validados via dataviz validate_palette na surface dark (zinc-900):
+// in/out deutan ΔE 10.0; v4/v6 deutan ΔE 23+ — todos os checks PASS.
+export const COLOR_IN = '#00a870' // entrada — verde vivo
+export const COLOR_OUT = '#f05a24' // saída — laranja-avermelhado vivo
 export const COLOR_UNKNOWN = '#a1a1aa' // sem direção — neutro deliberado
+export const COLOR_V4 = '#00a870' // família IPv4 (modo "por versão")
+export const COLOR_V6 = '#8b5cf6' // família IPv6 — violeta
 
 /** Alpha em hex de 2 dígitos (ex.: '26' ≈ 15%) sobre uma cor #rrggbb */
 export function withAlpha(hex: string, alpha2: string): string {

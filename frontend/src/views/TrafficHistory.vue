@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import { COLOR_IN, COLOR_OUT, COLOR_UNKNOWN, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks } from '../lib/chartTheme'
+import { COLOR_IN, COLOR_OUT, COLOR_UNKNOWN, COLOR_V4, COLOR_V6, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks } from '../lib/chartTheme'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -37,11 +37,15 @@ interface TimelinePoint {
   out_packets: number
   unknown_bytes: number
   unknown_packets: number
+  v4_bytes: number
+  v6_bytes: number
 }
 
 const exporters = ref<Exporter[]>([])
 const selectedDevice = ref<string>('')
 const selectedHours = ref(1)
+// Modo do gráfico: espelhado por direção ou comparativo por família de IP
+const viewMode = ref<'direction' | 'family'>('direction')
 const points = ref<TimelinePoint[]>([])
 const loading = ref(false)
 
@@ -76,6 +80,36 @@ const hasUnknown = computed(() => points.value.some((p) => p.unknown_bytes > 0))
 const lineChartData = computed(() => {
   const labels = points.value.map((p) => formatLabel(p.minute))
 
+  if (viewMode.value === 'family') {
+    return {
+      labels,
+      datasets: [
+        {
+          label: 'IPv4',
+          borderColor: COLOR_V4,
+          backgroundColor: withAlpha(COLOR_V4, '66'),
+          borderWidth: 0,
+          data: points.value.map((p) => +toMbps(p.v4_bytes).toFixed(3)),
+          tension: 0,
+          fill: true,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        },
+        {
+          label: 'IPv6',
+          borderColor: COLOR_V6,
+          backgroundColor: withAlpha(COLOR_V6, '66'),
+          borderWidth: 0,
+          data: points.value.map((p) => +toMbps(p.v6_bytes).toFixed(3)),
+          tension: 0,
+          fill: true,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        },
+      ],
+    }
+  }
+
   if (!hasDirection.value) {
     return {
       labels,
@@ -83,8 +117,8 @@ const lineChartData = computed(() => {
         {
           label: 'Tráfego',
           borderColor: COLOR_IN,
-          backgroundColor: withAlpha(COLOR_IN, '1a'),
-          borderWidth: 2,
+          backgroundColor: withAlpha(COLOR_IN, '66'),
+          borderWidth: 0,
           data: points.value.map((p) => +toMbps(p.total_bytes).toFixed(3)),
           tension: 0,
           fill: true,
@@ -99,8 +133,8 @@ const lineChartData = computed(() => {
     {
       label: 'Entrada',
       borderColor: COLOR_IN,
-      backgroundColor: withAlpha(COLOR_IN, '26'),
-      borderWidth: 2,
+      backgroundColor: withAlpha(COLOR_IN, '66'),
+      borderWidth: 0,
       // mirrored: inbound above the axis
       data: points.value.map((p) => +toMbps(p.in_bytes).toFixed(3)),
       tension: 0,
@@ -111,8 +145,8 @@ const lineChartData = computed(() => {
     {
       label: 'Saída',
       borderColor: COLOR_OUT,
-      backgroundColor: withAlpha(COLOR_OUT, '26'),
-      borderWidth: 2,
+      backgroundColor: withAlpha(COLOR_OUT, '66'),
+      borderWidth: 0,
       // mirrored: outbound below the axis (negated; labels use abs)
       data: points.value.map((p) => -toMbps(p.out_bytes).toFixed(3)),
       tension: 0,
@@ -146,7 +180,7 @@ const lineChartOptions = computed(() => ({
   animation: { duration: 0 },
   interaction: { mode: 'index' as const, intersect: false },
   plugins: {
-    legend: { ...mirroredLegend, display: hasDirection.value },
+    legend: { ...mirroredLegend, display: viewMode.value === 'family' || hasDirection.value },
     tooltip: mirroredTooltip,
   },
   scales: {
@@ -231,6 +265,19 @@ onUnmounted(() => {
         </div>
 
         <div class="flex items-center gap-3">
+          <div class="flex rounded-lg border border-zinc-800 overflow-hidden text-sm">
+            <button
+              class="px-3 py-2 transition-colors"
+              :class="viewMode === 'direction' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'"
+              @click="viewMode = 'direction'"
+            >Direção</button>
+            <button
+              class="px-3 py-2 transition-colors border-l border-zinc-800"
+              :class="viewMode === 'family' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'"
+              @click="viewMode = 'family'"
+            >Versão IP</button>
+          </div>
+
           <select
             v-model="selectedDevice"
             @change="loadData"

@@ -74,9 +74,9 @@ function liveDatasets(inData: number[], outData: number[]) {
   return [
     {
       label: 'Entrada',
-      backgroundColor: withAlpha(COLOR_IN, '26'),
+      backgroundColor: withAlpha(COLOR_IN, '66'),
       borderColor: COLOR_IN,
-      borderWidth: 2,
+      borderWidth: 0,
       data: inData,
       tension: 0,
       fill: 'origin',
@@ -85,9 +85,9 @@ function liveDatasets(inData: number[], outData: number[]) {
     },
     {
       label: 'Saída',
-      backgroundColor: withAlpha(COLOR_OUT, '26'),
+      backgroundColor: withAlpha(COLOR_OUT, '66'),
       borderColor: COLOR_OUT,
-      borderWidth: 2,
+      borderWidth: 0,
       data: outData,
       tension: 0,
       fill: 'origin',

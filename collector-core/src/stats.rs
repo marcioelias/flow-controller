@@ -400,6 +400,9 @@ pub struct TimelinePoint {
     /// direction = 255 (exporter does not report IE 61)
     pub unknown_bytes: u64,
     pub unknown_packets: u64,
+    /// Split por família de IP (task 13.7)
+    pub v4_bytes: u64,
+    pub v6_bytes: u64,
 }
 
 pub async fn get_timeline_handler(
@@ -423,27 +426,36 @@ pub async fn get_timeline_handler(
                 sumIf(packets, direction = 1) AS out_packets, \
                 sumIf(bytes, direction = 255) AS unknown_bytes, \
                 sumIf(packets, direction = 255) AS unknown_packets";
+    // The literal `fam` column tags which table each union arm came from
     let sql = format!(
-        "SELECT toUnixTimestamp({bucket_fn}(timestamp)) AS minute, {dir_cols} \
+        "SELECT toUnixTimestamp({bucket_fn}(timestamp)) AS minute, 4 AS fam, {dir_cols} \
          FROM network_flows_v4 {wc} GROUP BY minute ORDER BY minute ASC \
          UNION ALL \
-         SELECT toUnixTimestamp({bucket_fn}(timestamp)) AS minute, {dir_cols} \
+         SELECT toUnixTimestamp({bucket_fn}(timestamp)) AS minute, 6 AS fam, {dir_cols} \
          FROM network_flows_v6 {wc} GROUP BY minute ORDER BY minute ASC \
          FORMAT JSON"
     );
 
     let val = ch_query(&sql).await?;
-    let mut map: BTreeMap<u64, [u64; 6]> = BTreeMap::new();
+    let mut map: BTreeMap<u64, [u64; 8]> = BTreeMap::new();
 
     for row in val["data"].as_array().cloned().unwrap_or_default() {
         let minute = parse_u64_field(&row["minute"]);
-        let e = map.entry(minute).or_insert([0; 6]);
-        e[0] += parse_u64_field(&row["in_bytes"]);
+        let e = map.entry(minute).or_insert([0; 8]);
+        let in_b = parse_u64_field(&row["in_bytes"]);
+        let out_b = parse_u64_field(&row["out_bytes"]);
+        let unk_b = parse_u64_field(&row["unknown_bytes"]);
+        e[0] += in_b;
         e[1] += parse_u64_field(&row["in_packets"]);
-        e[2] += parse_u64_field(&row["out_bytes"]);
+        e[2] += out_b;
         e[3] += parse_u64_field(&row["out_packets"]);
-        e[4] += parse_u64_field(&row["unknown_bytes"]);
+        e[4] += unk_b;
         e[5] += parse_u64_field(&row["unknown_packets"]);
+        if parse_u64_field(&row["fam"]) == 6 {
+            e[7] += in_b + out_b + unk_b;
+        } else {
+            e[6] += in_b + out_b + unk_b;
+        }
     }
 
     let points = map
@@ -458,6 +470,8 @@ pub async fn get_timeline_handler(
             out_packets: d[3],
             unknown_bytes: d[4],
             unknown_packets: d[5],
+            v4_bytes: d[6],
+            v6_bytes: d[7],
         })
         .collect();
 
