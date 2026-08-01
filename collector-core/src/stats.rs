@@ -403,6 +403,12 @@ pub struct TimelinePoint {
     /// Split por família de IP (task 13.7)
     pub v4_bytes: u64,
     pub v6_bytes: u64,
+    /// Família × direção para o gráfico empilhado (task 13.9);
+    /// sem direção (255) conta como entrada
+    pub v4_in_bytes: u64,
+    pub v4_out_bytes: u64,
+    pub v6_in_bytes: u64,
+    pub v6_out_bytes: u64,
 }
 
 pub async fn get_timeline_handler(
@@ -437,11 +443,11 @@ pub async fn get_timeline_handler(
     );
 
     let val = ch_query(&sql).await?;
-    let mut map: BTreeMap<u64, [u64; 8]> = BTreeMap::new();
+    let mut map: BTreeMap<u64, [u64; 12]> = BTreeMap::new();
 
     for row in val["data"].as_array().cloned().unwrap_or_default() {
         let minute = parse_u64_field(&row["minute"]);
-        let e = map.entry(minute).or_insert([0; 8]);
+        let e = map.entry(minute).or_insert([0; 12]);
         let in_b = parse_u64_field(&row["in_bytes"]);
         let out_b = parse_u64_field(&row["out_bytes"]);
         let unk_b = parse_u64_field(&row["unknown_bytes"]);
@@ -453,8 +459,12 @@ pub async fn get_timeline_handler(
         e[5] += parse_u64_field(&row["unknown_packets"]);
         if parse_u64_field(&row["fam"]) == 6 {
             e[7] += in_b + out_b + unk_b;
+            e[10] += in_b + unk_b;
+            e[11] += out_b;
         } else {
             e[6] += in_b + out_b + unk_b;
+            e[8] += in_b + unk_b;
+            e[9] += out_b;
         }
     }
 
@@ -472,6 +482,10 @@ pub async fn get_timeline_handler(
             unknown_packets: d[5],
             v4_bytes: d[6],
             v6_bytes: d[7],
+            v4_in_bytes: d[8],
+            v4_out_bytes: d[9],
+            v6_in_bytes: d[10],
+            v6_out_bytes: d[11],
         })
         .collect();
 

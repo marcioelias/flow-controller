@@ -338,7 +338,9 @@ tráfego como ele realmente aconteceu.
 | 13.4 Gráfico ao vivo espelhado e sem suavização | `tasks/task-13.4-live-chart-mirror.md` | ✅ |
 | 13.5 Dashboard em abas (Tempo real / Histórico / Servidor) | `tasks/task-13.5-dashboard-tabs.md` | ✅ |
 | 13.6 Taxa real no gráfico ao vivo (retroativo) | `tasks/task-13.6-live-true-rate.md` | ✅ |
-| 13.7 Banda por versão de IP (v4 × v6) | `tasks/task-13.7-ip-family-chart.md` | ✅ |
+| 13.7 Banda por versão de IP (v4 × v6) | `tasks/task-13.7-ip-family-chart.md` | ✅ (superseded por 13.9) |
+| 13.8 Timestamps IPFIX relativos (IE 21/22 + IE 160) | `tasks/task-13.8-ipfix-sysuptime.md` | ✅ |
+| 13.9 Espelho empilhado por família + stats 95% | `tasks/task-13.9-stacked-family.md` | ✅ |
 
 Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 

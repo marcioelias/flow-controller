@@ -405,7 +405,7 @@ fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFl
 }
 
 #[inline]
-fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8], time: &TimeCtx) {
+fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8]) {
     let f_len = field_data.len();
     match field_type {
         IANA_FLOW_START_SEC => flow.start_ms = read_uint(field_data) * 1000,
@@ -558,7 +558,7 @@ fn parse_data_set(
             match field.field_type {
                 IANA_FIRST_SWITCHED => raw_first = Some(read_uint(field_data)),
                 IANA_LAST_SWITCHED => raw_last = Some(read_uint(field_data)),
-                _ => decode_field(&mut flow, field.field_type, field_data, time),
+                _ => decode_field(&mut flow, field.field_type, field_data),
             }
             f_ptr += f_len;
         }
@@ -648,7 +648,7 @@ fn parse_varlen_records(
             match field.field_type {
                 IANA_FIRST_SWITCHED => raw_first = Some(read_uint(field_data)),
                 IANA_LAST_SWITCHED => raw_last = Some(read_uint(field_data)),
-                _ => decode_field(&mut flow, field.field_type, field_data, time),
+                _ => decode_field(&mut flow, field.field_type, field_data),
             }
             f_ptr += f_len;
         }

@@ -74,8 +74,10 @@ use template_cache::ThreadLocalTemplateCache;
 #[derive(Serialize, Clone, Debug)]
 pub struct LiveSlice {
     pub sec: u32,
-    pub bytes_in: u64,
-    pub bytes_out: u64,
+    pub v4_in: u64,
+    pub v4_out: u64,
+    pub v6_in: u64,
+    pub v6_out: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -792,7 +794,8 @@ fn main() -> anyhow::Result<()> {
                         std::collections::HashMap::new();
                     let mut per_device_out: std::collections::HashMap<String, u64> =
                         std::collections::HashMap::new();
-                    let mut slice_totals: std::collections::BTreeMap<u32, (u64, u64)> =
+                    // [v4_in, v4_out, v6_in, v6_out] — sem direção conta como entrada
+                    let mut slice_totals: std::collections::BTreeMap<u32, [u64; 4]> =
                         std::collections::BTreeMap::new();
                     // Which directions each exporter reported this window —
                     // both = totals would double-count if simply summed
@@ -802,11 +805,9 @@ fn main() -> anyhow::Result<()> {
                         window_total_bytes += m.bytes;
                         {
                             let t = slice_totals.entry(*slice_sec).or_default();
-                            if key.direction == flow_types::DIRECTION_EGRESS {
-                                t.1 += m.bytes;
-                            } else {
-                                t.0 += m.bytes;
-                            }
+                            let v6 = matches!(key.src_ip, flow_types::IpAddrType::V6(_));
+                            let out = key.direction == flow_types::DIRECTION_EGRESS;
+                            t[usize::from(v6) * 2 + usize::from(out)] += m.bytes;
                         }
                         *per_device_bytes
                             .entry(key.exporter_ip.to_string())
@@ -859,10 +860,12 @@ fn main() -> anyhow::Result<()> {
                         per_device_out,
                         slices: slice_totals
                             .into_iter()
-                            .map(|(sec, (bi, bo))| LiveSlice {
+                            .map(|(sec, t)| LiveSlice {
                                 sec,
-                                bytes_in: bi,
-                                bytes_out: bo,
+                                v4_in: t[0],
+                                v4_out: t[1],
+                                v6_in: t[2],
+                                v6_out: t[3],
                             })
                             .collect(),
                     });

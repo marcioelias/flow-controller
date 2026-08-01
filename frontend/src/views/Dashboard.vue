@@ -13,7 +13,7 @@ import {
   Gauge, Zap, Users, Bell, Radio, Flame,
 } from 'lucide-vue-next'
 import { formatBytes } from '../utils/format'
-import { COLOR_IN, COLOR_OUT, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks } from '../lib/chartTheme'
+import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, type FamFilter } from '../lib/chartTheme'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler)
 
@@ -56,51 +56,24 @@ const liveTotalBps = ref(0)
 // a que pertencem — inclusive retroativamente, conforme flows expiram no
 // exporter. Taxa real, não arrival (task 13.6).
 const LIVE_WINDOW_SECS = 300
-const liveBuckets = new Map<number, { inB: number; outB: number }>()
+const liveBuckets = new Map<number, { v4i: number; v4o: number; v6i: number; v6o: number }>()
+const famFilter = ref<FamFilter>('all')
 
-function bucketAdd(sec: number, inB: number, outB: number) {
+function bucketAdd(sec: number, v4i: number, v4o: number, v6i: number, v6o: number) {
   const b = liveBuckets.get(sec)
   if (b) {
-    b.inB += inB
-    b.outB += outB
+    b.v4i += v4i
+    b.v4o += v4o
+    b.v6i += v6i
+    b.v6o += v6o
   } else {
-    liveBuckets.set(sec, { inB, outB })
+    liveBuckets.set(sec, { v4i, v4o, v6i, v6o })
   }
 }
 
-// Espelho NOC: entrada acima do eixo, saída abaixo (negativa).
-// tension 0 — tráfego de rede não é suave; curva esconde microburst.
-function liveDatasets(inData: number[], outData: number[]) {
-  return [
-    {
-      label: 'Entrada',
-      backgroundColor: withAlpha(COLOR_IN, '66'),
-      borderColor: COLOR_IN,
-      borderWidth: 0,
-      data: inData,
-      tension: 0,
-      fill: 'origin',
-      pointRadius: 0,
-      pointHoverRadius: 4,
-    },
-    {
-      label: 'Saída',
-      backgroundColor: withAlpha(COLOR_OUT, '66'),
-      borderColor: COLOR_OUT,
-      borderWidth: 0,
-      data: outData,
-      tension: 0,
-      fill: 'origin',
-      pointRadius: 0,
-      pointHoverRadius: 4,
-    },
-  ]
-}
-
-const lineChartData = ref({
-  labels: [] as string[],
-  datasets: liveDatasets([], []),
-})
+const lineChartData = ref<any>({ labels: [], datasets: [] })
+const liveStatsIn = ref({ min: 0, max: 0, avg: 0, p95: 0 })
+const liveStatsOut = ref({ min: 0, max: 0, avg: 0, p95: 0 })
 
 const donutChartData = ref({
   labels: ['TCP', 'UDP', 'ICMP', 'Outros'],
@@ -122,6 +95,7 @@ const chartOptions = {
       grid: { display: false },
     },
     y: {
+      stacked: true,
       ticks: mirroredYTicks('#6b7280'),
       grid: { color: (ctx: any) => (ctx.tick.value === 0 ? '#52525b' : '#27272a') },
     },
@@ -168,6 +142,7 @@ function exporterName(ip: string) {
 function selectDevice(ip: string | null) {
   selectedDevice.value = ip
   liveBuckets.clear()
+  if (ip) famFilter.value = 'v4' // slots v4 = par único quando filtrado por device
   loadProtocolStats()
 }
 
@@ -283,27 +258,39 @@ function updateChart() {
     if (sec < first) liveBuckets.delete(sec)
   }
 
+  const mbps = (bytes: number) => (bytes * 8) / 1_000_000
   const labels: string[] = []
-  const inData: number[] = []
-  const outData: number[] = []
-  let recentIn = 0
-  let recentOut = 0
+  const v4in: number[] = []
+  const v6in: number[] = []
+  const v4out: number[] = []
+  const v6out: number[] = []
+  const totIn: number[] = []
+  const totOut: number[] = []
+  let recent = 0
   for (let sec = first; sec < nowSec; sec++) {
     labels.push(new Date(sec * 1000).toTimeString().slice(0, 8))
-    const b = liveBuckets.get(sec)
-    const inMbps = b ? (b.inB * 8) / 1_000_000 : 0
-    const outMbps = b ? (b.outB * 8) / 1_000_000 : 0
-    inData.push(inMbps)
-    outData.push(-outMbps)
-    if (sec >= nowSec - 10) {
-      recentIn += inMbps
-      recentOut += outMbps
-    }
+    const b = liveBuckets.get(sec) ?? { v4i: 0, v4o: 0, v6i: 0, v6o: 0 }
+    v4in.push(mbps(b.v4i))
+    v6in.push(mbps(b.v6i))
+    v4out.push(mbps(b.v4o))
+    v6out.push(mbps(b.v6o))
+    const tIn =
+      famFilter.value === 'v6' ? mbps(b.v6i) : famFilter.value === 'v4' ? mbps(b.v4i) : mbps(b.v4i + b.v6i)
+    const tOut =
+      famFilter.value === 'v6' ? mbps(b.v6o) : famFilter.value === 'v4' ? mbps(b.v4o) : mbps(b.v4o + b.v6o)
+    totIn.push(tIn)
+    totOut.push(tOut)
+    if (sec >= nowSec - 10) recent += tIn + tOut
   }
   // "agora" = média dos últimos 10s — sobe conforme o retroativo preenche
-  liveTotalBps.value = (recentIn + recentOut) / 10
+  liveTotalBps.value = recent / 10
+  liveStatsIn.value = seriesStats(totIn)
+  liveStatsOut.value = seriesStats(totOut)
 
-  lineChartData.value = { labels, datasets: liveDatasets(inData, outData) }
+  lineChartData.value = {
+    labels,
+    datasets: stackedMirrorDatasets(famFilter.value, v4in, v6in, v4out, v6out),
+  }
 }
 
 let ws: WebSocket | null = null
@@ -321,15 +308,17 @@ function connectWs() {
       if (!stats.timestamp_sec) return
       if (selectedDevice.value) {
         // Fatias são globais; com filtro de dispositivo o gráfico volta a ser
-        // arrival-based (limitação registrada na task 13.6)
+        // arrival-based e sem split de família (slots v4 = par único in/out)
         bucketAdd(
           stats.timestamp_sec,
           stats.per_device_in?.[selectedDevice.value] ?? 0,
           stats.per_device_out?.[selectedDevice.value] ?? 0,
+          0,
+          0,
         )
       } else if (Array.isArray(stats.slices)) {
         for (const sl of stats.slices) {
-          bucketAdd(sl.sec, sl.bytes_in ?? 0, sl.bytes_out ?? 0)
+          bucketAdd(sl.sec, sl.v4_in ?? 0, sl.v4_out ?? 0, sl.v6_in ?? 0, sl.v6_out ?? 0)
         }
       }
     } catch {}
@@ -510,13 +499,50 @@ onUnmounted(() => {
                 {{ liveTotalBps.toFixed(1) }} Mbps (média 10s) — preenche retroativo conforme flows expiram
               </p>
             </div>
-            <span class="relative flex h-2 w-2">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60"></span>
-              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
+            <div class="flex items-center gap-3">
+              <div v-if="!selectedDevice" class="flex rounded-md border border-zinc-800 overflow-hidden text-xs">
+                <button
+                  v-for="opt in [
+                    { v: 'all', label: 'Todos' },
+                    { v: 'v4', label: 'IPv4' },
+                    { v: 'v6', label: 'IPv6' },
+                  ]"
+                  :key="opt.v"
+                  class="px-2.5 py-1.5 transition-colors first:border-l-0 border-l border-zinc-800"
+                  :class="famFilter === opt.v ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'"
+                  @click="famFilter = opt.v as any"
+                >{{ opt.label }}</button>
+              </div>
+              <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+            </div>
           </div>
           <div class="h-64">
             <Line :data="lineChartData" :options="chartOptions" />
+          </div>
+
+          <!-- mín/máx/méd/95% da janela de 5 min -->
+          <div class="mt-4 pt-3 border-t border-zinc-800 grid grid-cols-2 gap-4 text-xs">
+            <div class="flex items-center gap-3 flex-wrap">
+              <span class="flex items-center gap-1.5 font-medium text-zinc-300">
+                <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_IN }"></span> Entrada
+              </span>
+              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ liveStatsIn.min.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ liveStatsIn.max.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ liveStatsIn.avg.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ liveStatsIn.p95.toFixed(1) }}</span> Mbps</span>
+            </div>
+            <div class="flex items-center gap-3 flex-wrap">
+              <span class="flex items-center gap-1.5 font-medium text-zinc-300">
+                <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_OUT }"></span> Saída
+              </span>
+              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ liveStatsOut.min.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ liveStatsOut.max.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ liveStatsOut.avg.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ liveStatsOut.p95.toFixed(1) }}</span> Mbps</span>
+            </div>
           </div>
         </div>
 

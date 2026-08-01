@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import { COLOR_IN, COLOR_OUT, COLOR_UNKNOWN, COLOR_V4, COLOR_V6, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks } from '../lib/chartTheme'
+import { COLOR_IN, COLOR_OUT, COLOR_UNKNOWN, withAlpha, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, type FamFilter } from '../lib/chartTheme'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -39,13 +39,17 @@ interface TimelinePoint {
   unknown_packets: number
   v4_bytes: number
   v6_bytes: number
+  v4_in_bytes: number
+  v4_out_bytes: number
+  v6_in_bytes: number
+  v6_out_bytes: number
 }
 
 const exporters = ref<Exporter[]>([])
 const selectedDevice = ref<string>('')
 const selectedHours = ref(1)
-// Modo do gráfico: espelhado por direção ou comparativo por família de IP
-const viewMode = ref<'direction' | 'family'>('direction')
+// Filtro de família: empilhado (Todos) ou uma família isolada
+const famFilter = ref<FamFilter>('all')
 const points = ref<TimelinePoint[]>([])
 const loading = ref(false)
 
@@ -80,36 +84,6 @@ const hasUnknown = computed(() => points.value.some((p) => p.unknown_bytes > 0))
 const lineChartData = computed(() => {
   const labels = points.value.map((p) => formatLabel(p.minute))
 
-  if (viewMode.value === 'family') {
-    return {
-      labels,
-      datasets: [
-        {
-          label: 'IPv4',
-          borderColor: COLOR_V4,
-          backgroundColor: withAlpha(COLOR_V4, '66'),
-          borderWidth: 0,
-          data: points.value.map((p) => +toMbps(p.v4_bytes).toFixed(3)),
-          tension: 0,
-          fill: true,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-        },
-        {
-          label: 'IPv6',
-          borderColor: COLOR_V6,
-          backgroundColor: withAlpha(COLOR_V6, '66'),
-          borderWidth: 0,
-          data: points.value.map((p) => +toMbps(p.v6_bytes).toFixed(3)),
-          tension: 0,
-          fill: true,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-        },
-      ],
-    }
-  }
-
   if (!hasDirection.value) {
     return {
       labels,
@@ -129,34 +103,16 @@ const lineChartData = computed(() => {
     }
   }
 
-  const datasets: any[] = [
-    {
-      label: 'Entrada',
-      borderColor: COLOR_IN,
-      backgroundColor: withAlpha(COLOR_IN, '66'),
-      borderWidth: 0,
-      // mirrored: inbound above the axis
-      data: points.value.map((p) => +toMbps(p.in_bytes).toFixed(3)),
-      tension: 0,
-      fill: true,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-    },
-    {
-      label: 'Saída',
-      borderColor: COLOR_OUT,
-      backgroundColor: withAlpha(COLOR_OUT, '66'),
-      borderWidth: 0,
-      // mirrored: outbound below the axis (negated; labels use abs)
-      data: points.value.map((p) => -toMbps(p.out_bytes).toFixed(3)),
-      tension: 0,
-      fill: true,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-    },
-  ]
+  // Empilhado: v4 + v6 somam o total de cada lado do espelho (task 13.9)
+  const datasets: any[] = stackedMirrorDatasets(
+    famFilter.value,
+    points.value.map((p) => +toMbps(p.v4_in_bytes).toFixed(3)),
+    points.value.map((p) => +toMbps(p.v6_in_bytes).toFixed(3)),
+    points.value.map((p) => +toMbps(p.v4_out_bytes).toFixed(3)),
+    points.value.map((p) => +toMbps(p.v6_out_bytes).toFixed(3)),
+  )
 
-  if (hasUnknown.value) {
+  if (famFilter.value === 'all' && hasUnknown.value) {
     datasets.push({
       label: 'Sem direção',
       borderColor: COLOR_UNKNOWN,
@@ -180,7 +136,7 @@ const lineChartOptions = computed(() => ({
   animation: { duration: 0 },
   interaction: { mode: 'index' as const, intersect: false },
   plugins: {
-    legend: { ...mirroredLegend, display: viewMode.value === 'family' || hasDirection.value },
+    legend: { ...mirroredLegend, display: hasDirection.value },
     tooltip: mirroredTooltip,
   },
   scales: {
@@ -189,6 +145,7 @@ const lineChartOptions = computed(() => ({
       grid: { display: false },
     },
     y: {
+      stacked: famFilter.value === 'all',
       ticks: mirroredYTicks(),
       grid: {
         color: (ctx: any) => (ctx.tick.value === 0 ? '#52525b' : '#374151'),
@@ -196,6 +153,17 @@ const lineChartOptions = computed(() => ({
     },
   },
 }))
+
+function famSeries(dir: 'in' | 'out'): number[] {
+  return points.value.map((p) => {
+    const v4 = dir === 'in' ? p.v4_in_bytes : p.v4_out_bytes
+    const v6 = dir === 'in' ? p.v6_in_bytes : p.v6_out_bytes
+    const b = famFilter.value === 'v4' ? v4 : famFilter.value === 'v6' ? v6 : v4 + v6
+    return toMbps(b)
+  })
+}
+const statsIn = computed(() => seriesStats(famSeries('in')))
+const statsOut = computed(() => seriesStats(famSeries('out')))
 
 const peakIn = computed(() =>
   points.value.length ? Math.max(...points.value.map((p) => (hasDirection.value ? p.in_bytes : p.total_bytes))) : 0,
@@ -267,15 +235,16 @@ onUnmounted(() => {
         <div class="flex items-center gap-3">
           <div class="flex rounded-lg border border-zinc-800 overflow-hidden text-sm">
             <button
-              class="px-3 py-2 transition-colors"
-              :class="viewMode === 'direction' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'"
-              @click="viewMode = 'direction'"
-            >Direção</button>
-            <button
-              class="px-3 py-2 transition-colors border-l border-zinc-800"
-              :class="viewMode === 'family' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'"
-              @click="viewMode = 'family'"
-            >Versão IP</button>
+              v-for="opt in [
+                { v: 'all', label: 'Todos' },
+                { v: 'v4', label: 'IPv4' },
+                { v: 'v6', label: 'IPv6' },
+              ]"
+              :key="opt.v"
+              class="px-3 py-2 transition-colors first:border-l-0 border-l border-zinc-800"
+              :class="famFilter === opt.v ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'"
+              @click="famFilter = opt.v as any"
+            >{{ opt.label }}</button>
           </div>
 
           <select
@@ -326,6 +295,28 @@ onUnmounted(() => {
         </div>
         <div v-else class="h-80">
           <Line :data="lineChartData" :options="lineChartOptions" />
+        </div>
+
+        <!-- Barra de stats mín/máx/méd/95% (task 13.9) -->
+        <div v-if="points.length > 0 && hasDirection" class="mt-4 pt-3 border-t border-zinc-800 grid grid-cols-2 gap-4 text-xs">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="flex items-center gap-1.5 font-medium text-zinc-300">
+              <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_IN }"></span> Entrada
+            </span>
+            <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsIn.min.toFixed(1) }}</span></span>
+            <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsIn.max.toFixed(1) }}</span></span>
+            <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsIn.avg.toFixed(1) }}</span></span>
+            <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsIn.p95.toFixed(1) }}</span> Mbps</span>
+          </div>
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="flex items-center gap-1.5 font-medium text-zinc-300">
+              <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_OUT }"></span> Saída
+            </span>
+            <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsOut.min.toFixed(1) }}</span></span>
+            <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsOut.max.toFixed(1) }}</span></span>
+            <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsOut.avg.toFixed(1) }}</span></span>
+            <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsOut.p95.toFixed(1) }}</span> Mbps</span>
+          </div>
         </div>
       </div>
 
