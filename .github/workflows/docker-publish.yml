@@ -10,7 +10,6 @@ on:
 env:
   REGISTRY:   ghcr.io
   COLLECTOR:  ghcr.io/${{ github.repository_owner }}/flowvision-collector
-  DASHBOARD:  ghcr.io/${{ github.repository_owner }}/flowvision-dashboard
 
 jobs:
   build-and-push:
@@ -46,12 +45,10 @@ jobs:
             TAG="${GITHUB_REF#refs/tags/}"          # e.g. v1.2.3-beta.1
             VER="${TAG#v}"                           # e.g. 1.2.3-beta.1
             echo "collector_tags=${{ env.COLLECTOR }}:${VER},${{ env.COLLECTOR }}:latest" >> $GITHUB_OUTPUT
-            echo "dashboard_tags=${{ env.DASHBOARD }}:${VER},${{ env.DASHBOARD }}:latest" >> $GITHUB_OUTPUT
           else
             SHA="${GITHUB_SHA::7}"
             BRANCH="${GITHUB_REF#refs/heads/}"
             echo "collector_tags=${{ env.COLLECTOR }}:${BRANCH}-${SHA}" >> $GITHUB_OUTPUT
-            echo "dashboard_tags=${{ env.DASHBOARD }}:${BRANCH}-${SHA}" >> $GITHUB_OUTPUT
           fi
 
       # ── Collector ───────────────────────────────────────────────────────
@@ -65,14 +62,3 @@ jobs:
           cache-from: type=gha
           cache-to:   type=gha,mode=max
 
-      # ── Dashboard ───────────────────────────────────────────────────────
-      # Context is repo root so the Dockerfile can COPY VERSION from there
-      - name: Build and push Dashboard
-        uses: docker/build-push-action@v6
-        with:
-          context:    .
-          file: frontend/Dockerfile
-          push:       ${{ github.event_name != 'pull_request' }}
-          tags:       ${{ steps.tags.outputs.dashboard_tags }}
-          cache-from: type=gha
-          cache-to:   type=gha,mode=max

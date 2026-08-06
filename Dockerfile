@@ -1,30 +1,41 @@
 # ==========================================
-# ESTÁGIO 1: COMPILAÇÃO CARGO 
+# ESTÁGIO 1: BUILD DA SPA (Vue/Vite)
+# O dist/ é embutido no binário Rust via rust-embed (task 16.3)
 # ==========================================
-FROM rust:bookworm as builder
+FROM node:20-slim AS ui
+
+WORKDIR /ui
+COPY VERSION /VERSION
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ .
+RUN npm run build
+
+# ==========================================
+# ESTÁGIO 2: COMPILAÇÃO CARGO
+# ==========================================
+FROM rust:bookworm AS builder
 
 WORKDIR /app
 COPY . .
+# SPA construída no estágio anterior — vira bytes do executável
+COPY --from=ui /ui/dist ./frontend/dist
 
-# Faz o build absoluto em modo de extrema performance release
 RUN cargo build --release
 
 # ==========================================
-# ESTÁGIO 2: EXECUÇÃO LEVE (SLIM)
+# ESTÁGIO 3: EXECUÇÃO LEVE (SLIM)
 # ==========================================
 FROM debian:bookworm-slim
 
-# Variáveis globais necessárias
 WORKDIR /app
 
-# Instala SSL genérico caso precise de comunicação e SQLite para o banco de autenticação
 RUN apt-get update && apt-get install -y ca-certificates sqlite3 libsqlite3-0 wget && rm -rf /var/lib/apt/lists/*
 
-# Extraimos só o binário duro sem cache de deps de 5GB do target e jogamos pra imagem leve
 COPY --from=builder /app/target/release/collector-core /usr/local/bin/collector-core
 
-# O Ingress UDP que captura os espelhos mikrotiks
+# NetFlow/IPFIX ingest + UI/API (a SPA é servida pelo próprio binário)
 EXPOSE 2055/udp
+EXPOSE 3000
 
-# Acorda o monstrinho
 CMD ["collector-core"]

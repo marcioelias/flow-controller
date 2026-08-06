@@ -46,6 +46,8 @@ services:
         condition: service_healthy
     ports:
       - "2055:2055/udp"
+      # UI + API — a SPA é servida pelo próprio coletor (sem nginx)
+      - "8080:3000"
     volumes:
       - auth_data:/app
       - exabgp_config:/run/exabgp-config
@@ -65,18 +67,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-
-  dashboard:
-    image: ghcr.io/marcioelias/flowvision-dashboard:${IMAGE_TAG:-latest}
-    container_name: vue-dashboard
-    depends_on:
-      flow-collector:
-        condition: service_started
-    ports:
-      - "8080:80"
-    networks:
-      - flow-net
-    restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest

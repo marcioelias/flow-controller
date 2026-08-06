@@ -16,6 +16,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: placeholder da SPA (rust-embed exige frontend/dist)
+        run: mkdir -p frontend/dist && touch frontend/dist/index.html
       - name: rustfmt
         run: cargo fmt --all --check
       - name: clippy (warnings = erro)

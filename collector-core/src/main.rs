@@ -72,6 +72,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use aggregator::{AggregatedMetrics, AggregationKey, ThreadLocalAggregator};
 use netflow_parser::parse_packet;
+use rust_embed::RustEmbed;
 use template_cache::ThreadLocalTemplateCache;
 
 /// Volume de um segundo específico dentro da janela drenada — permite ao
@@ -120,6 +121,45 @@ pub struct DebugFlow {
     pub flow_count: u64,
     /// 0 = ingress, 1 = egress, 255 = not reported (IE 61)
     pub direction: u8,
+}
+
+// ---------------------------------------------------------------------------
+// SPA embutida (task 16.3): o binário serve o dashboard — sem nginx.
+// Em release os arquivos do dist/ viram bytes do executável; em debug o
+// rust-embed lê do disco, então o dev com vite segue igual.
+// ---------------------------------------------------------------------------
+
+#[derive(RustEmbed)]
+#[folder = "../frontend/dist/"]
+struct UiAssets;
+
+async fn spa_handler(uri: axum::http::Uri) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let path = uri.path().trim_start_matches('/');
+    // Rota de API desconhecida não deve virar index.html
+    if path.starts_with("api/") || path.starts_with("ws") || path == "metrics" {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+
+    // SPA fallback: rota do router Vue cai no index.html
+    let (name, asset) = match UiAssets::get(if path.is_empty() { "index.html" } else { path }) {
+        Some(a) => (if path.is_empty() { "index.html" } else { path }, Some(a)),
+        None => ("index.html", UiAssets::get("index.html")),
+    };
+
+    match asset {
+        Some(content) => {
+            let mime = mime_guess::from_path(name).first_or_octet_stream();
+            (
+                StatusCode::OK,
+                [("Content-Type", mime.as_ref().to_string())],
+                content.data.into_owned(),
+            )
+                .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "ui not bundled").into_response(),
+    }
 }
 
 // Prometheus metrics handler (no auth — scraped externally)
@@ -744,6 +784,7 @@ fn main() -> anyhow::Result<()> {
             .merge(public_routes)
             .merge(protected_routes)
             .merge(user_routes)
+            .fallback(spa_handler)
             .with_state(app_state_clone.clone())
             .layer(axum::Extension(app_state_clone.ml_status.clone()))
             .layer(cors);
