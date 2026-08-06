@@ -374,6 +374,7 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 |------|-----------|--------|
 | 16.1 Observabilidade fina no NOC (lag, perda, sparkline, top ASN) | `tasks/task-16.1-noc-observability.md` | ✅ |
 | 16.2 Distribuição nativa Debian (.deb + systemd) — avaliação | `tasks/task-16.2-debian-packaging.md` | 🔲 |
+| 16.3 SPA no binário + fechar superfície do ClickHouse | `tasks/task-16.3-single-binary-ui.md` | 🔶 ch-api corrigido; embed pendente |
 
 ---
 

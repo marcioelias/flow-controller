@@ -56,11 +56,6 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/ch-api': {
-        target: 'http://localhost:8123',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/ch-api/, '')
-      },
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true

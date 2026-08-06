@@ -3,8 +3,10 @@ services:
     image: clickhouse/clickhouse-server:23.8
     container_name: ch-database
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      # Loopback apenas: o ClickHouse não tem autenticação — nunca expor na LAN.
+      # Dentro do compose o coletor fala via rede interna (http://clickhouse:8123).
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     ulimits:
