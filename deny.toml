@@ -1,0 +1,34 @@
+# Política de dependências do FlowVision (cargo-deny).
+# Produto comercial de código fechado: nada de copyleft forte na árvore.
+
+[licenses]
+# Permissivas e compatíveis com distribuição binária proprietária
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    # Copyleft fraco por arquivo — ok para uso como dependência intocada
+    "MPL-2.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Versões duplicadas incham o binário — avisa, não quebra o build
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[advisories]
+yanked = "warn"
