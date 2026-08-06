@@ -1,5 +1,5 @@
 use prometheus::core::Collector;
-use prometheus::{IntCounter, IntGauge, IntGaugeVec, Opts, Registry};
+use prometheus::{GaugeVec, IntCounter, IntGauge, IntGaugeVec, Opts, Registry};
 
 pub struct CollectorMetrics {
     pub registry: Registry,
@@ -34,6 +34,9 @@ pub struct CollectorMetrics {
     pub license_over_bps: IntGauge,
     /// 1 quando o excedente é sustentado (7d+) e as views analíticas bloqueiam
     pub license_degraded: IntGauge,
+    /// Idade média flowEnd→chegada por exporter (s) — diagnóstico de active
+    /// timeout mal configurado no roteador
+    pub exporter_telemetry_lag: GaugeVec,
 }
 
 impl Default for CollectorMetrics {
@@ -147,6 +150,17 @@ impl CollectorMetrics {
             "license_over_bps",
             "1 when 5-min average traffic exceeds the licensed max_bps",
         );
+        let exporter_telemetry_lag = GaugeVec::new(
+            Opts::new(
+                "exporter_telemetry_lag_seconds",
+                "Average flowEnd to arrival age per exporter (seconds)",
+            ),
+            &["exporter_ip"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(exporter_telemetry_lag.clone()))
+            .unwrap();
         let license_degraded = gauge(
             &registry,
             "license_degraded",
@@ -170,11 +184,21 @@ impl CollectorMetrics {
             exporter_bidirectional,
             license_over_bps,
             license_degraded,
+            exporter_telemetry_lag,
         }
     }
 }
 
 impl CollectorMetrics {
+    /// Maior lag de telemetria entre os exporters (segundos)
+    pub fn telemetry_lag_max(&self) -> f64 {
+        self.exporter_telemetry_lag
+            .collect()
+            .iter()
+            .flat_map(|mf| mf.get_metric().iter().map(|m| m.get_gauge().get_value()))
+            .fold(0.0, f64::max)
+    }
+
     /// Total de templates somando todos os workers (gauge é rotulado por worker)
     pub fn template_cache_total(&self) -> i64 {
         self.template_cache_size

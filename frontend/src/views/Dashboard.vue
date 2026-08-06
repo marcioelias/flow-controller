@@ -38,6 +38,9 @@ interface Overview {
   v6_share_pct: number
   storage_bytes: number
   storage_days: number
+  collector_drop_pct: number
+  telemetry_lag_secs: number
+  alerts_by_hour: number[]
 }
 interface TopTalker { src_ip: string; total_bytes: number; in_bytes: number; out_bytes: number }
 interface AlertEvent { id: number; src_ip: string; alert_type: string; severity: string; message: string; created_at: string }
@@ -49,6 +52,8 @@ const selectedDevice = ref<string | null>(null)
 const protocolStats = ref({ tcp: 0, udp: 0, icmp: 0, other: 0 })
 const overview = ref<Overview | null>(null)
 const topTalkers = ref<TopTalker[]>([])
+interface AsnEntry { asn: number; label: string; total_bytes: number }
+const topAsns = ref<AsnEntry[]>([])
 const recentAlerts = ref<AlertEvent[]>([])
 const canSeeAlerts = ref(true)
 const heatmap = ref<number[][]>([]) // [7 days][24 hours] bytes
@@ -199,6 +204,14 @@ async function loadTopTalkers() {
   } catch {}
 }
 
+async function loadTopAsns() {
+  try {
+    const res = await fetch('/api/stats/asn?minutes=60&limit=5&direction=dst', { headers: authStore.getAuthHeaders() })
+    if (res.ok) topAsns.value = await res.json()
+  } catch {}
+}
+const maxAsnBytes = computed(() => Math.max(1, ...topAsns.value.map((a) => a.total_bytes)))
+
 async function loadRecentAlerts() {
   if (!canSeeAlerts.value) return
   try {
@@ -329,7 +342,8 @@ onMounted(() => {
   loadHeatmap()
   unsubscribeLive = subscribe(onLiveMessage)
   updateChart() // janela restaurada aparece já no primeiro paint
-  overviewTimer = setInterval(() => { if (visible()) { loadOverview(); loadTopTalkers(); loadRecentAlerts() } }, 10_000)
+  loadTopAsns()
+  overviewTimer = setInterval(() => { if (visible()) { loadOverview(); loadTopTalkers(); loadRecentAlerts(); loadTopAsns() } }, 10_000)
   pollTimer = setInterval(() => { if (visible()) { loadExporters(); loadProtocolStats(); loadExporterStats(); loadHeatmap() } }, 60_000)
   chartTimer = setInterval(updateChart, 1000)
 })
@@ -461,7 +475,12 @@ onUnmounted(() => {
           <p class="text-xl font-bold tabular-nums leading-tight" :class="exportersMissing ? 'text-red-400' : 'text-slate-100'">
             {{ overview.active_exporters }}<span class="text-zinc-500 text-sm">/{{ configuredExporters }}</span>
           </p>
-          <p class="text-[11px] text-zinc-500 mt-0.5">enviando flows</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5">
+            lag ~{{ overview.telemetry_lag_secs.toFixed(0) }}s ·
+            <span :class="overview.collector_drop_pct > 1 ? 'text-red-400' : ''">
+              perda {{ overview.collector_drop_pct.toFixed(overview.collector_drop_pct > 0 ? 2 : 0) }}%
+            </span>
+          </p>
         </div>
 
         <div
@@ -476,7 +495,16 @@ onUnmounted(() => {
           <p class="text-xl font-bold tabular-nums leading-tight" :class="overview.alerts_active > 0 ? 'text-red-400' : 'text-slate-100'">
             {{ overview.alerts_24h }}
           </p>
-          <p class="text-[11px] text-zinc-500 mt-0.5">{{ overview.alerts_active }} na última hora</p>
+          <div class="flex items-end gap-px h-5 mt-1" title="Alertas por hora — últimas 24h">
+            <div
+              v-for="(n, i) in overview.alerts_by_hour"
+              :key="i"
+              class="flex-1 rounded-sm"
+              :class="n > 0 ? 'bg-red-400/70' : 'bg-zinc-800'"
+              :style="{ height: n > 0 ? Math.max(15, Math.min(100, (n / Math.max(1, ...overview.alerts_by_hour)) * 100)) + '%' : '12%' }"
+            ></div>
+          </div>
+          <p class="text-[11px] text-zinc-500 mt-1">{{ overview.alerts_active }} na última hora</p>
         </div>
 
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
@@ -636,6 +664,30 @@ onUnmounted(() => {
               <span class="text-xs text-zinc-500">estabelecidas</span>
             </div>
             <p v-if="overview && overview.bgp_sessions_total === 0" class="text-xs text-zinc-500 mt-1">nenhum peer configurado</p>
+          </div>
+
+          <!-- Top ASNs de destino — visão de peering -->
+          <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 cursor-pointer hover:border-zinc-700 transition-colors" @click="router.push('/asn-traffic')">
+            <h2 class="text-base font-semibold text-slate-200 flex items-center gap-2 mb-3">
+              <Globe2 class="w-4 h-4 text-sky-400" /> Top ASNs (destino)
+            </h2>
+            <div v-if="topAsns.length === 0" class="text-sm text-zinc-500 py-2 text-center">
+              Sem dados de ASN — exporter precisa enviar BGP AS.
+            </div>
+            <ul v-else class="space-y-2">
+              <li v-for="a in topAsns" :key="a.asn" class="text-xs">
+                <div class="flex justify-between mb-0.5">
+                  <span class="text-zinc-300 truncate">
+                    <span class="font-mono text-zinc-500">AS{{ a.asn }}</span> {{ a.label }}
+                  </span>
+                  <span class="text-zinc-500 font-mono shrink-0 ml-2">{{ formatBytes(a.total_bytes) }}</span>
+                </div>
+                <div class="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full bg-sky-400/70"
+                    :style="{ width: (a.total_bytes / maxAsnBytes) * 100 + '%' }"></div>
+                </div>
+              </li>
+            </ul>
           </div>
 
           <!-- Recent alerts -->

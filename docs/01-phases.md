@@ -368,6 +368,15 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 
 ---
 
+## Phase 16 — Observabilidade
+
+| Task | Spec file | Status |
+|------|-----------|--------|
+| 16.1 Observabilidade fina no NOC (lag, perda, sparkline, top ASN) | `tasks/task-16.1-noc-observability.md` | ✅ |
+| 16.2 Distribuição nativa Debian (.deb + systemd) — avaliação | `tasks/task-16.2-debian-packaging.md` | 🔲 |
+
+---
+
 ## Dependency Graph
 
 ```

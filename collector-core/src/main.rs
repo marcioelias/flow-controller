@@ -1121,6 +1121,9 @@ fn worker_loop(
 
     let mut templates = ThreadLocalTemplateCache::new();
     let mut aggregator = ThreadLocalAggregator::new();
+    // (soma_ms, n) do atraso flowEnd→chegada por exporter na janela do flush
+    let mut lag_acc: std::collections::HashMap<Ipv4Addr, (u64, u32)> =
+        std::collections::HashMap::new();
     let mut last_flush = Instant::now();
     let mut last_drop_warn = Instant::now() - Duration::from_secs(10);
     let mut last_debug_send = Instant::now() - DEBUG_MIN_INTERVAL;
@@ -1141,6 +1144,7 @@ fn worker_loop(
                         .flows_decoded
                         .inc_by(parsed_flows.len() as u64);
                     let now_secs = unix_now_secs();
+                    let now_ms = now_secs as u64 * 1000;
 
                     for flow in parsed_flows {
                         // Debug Console gets a producer-side sample: without this,
@@ -1178,6 +1182,11 @@ fn worker_loop(
                                 direction: flow.direction,
                             });
                         }
+                        if flow.end_ms > 0 {
+                            let (sum, n) = lag_acc.entry(flow.exporter_ip).or_default();
+                            *sum += now_ms.saturating_sub(flow.end_ms);
+                            *n += 1;
+                        }
                         aggregator.aggregate(&flow, now_secs);
                     }
                 }
@@ -1200,6 +1209,12 @@ fn worker_loop(
                     .exporter_sampling_rate
                     .with_label_values(&[&exp_ip.to_string(), &domain.to_string()])
                     .set(*rate as i64);
+            }
+            for (exp, (sum, n)) in lag_acc.drain() {
+                worker_metrics
+                    .exporter_telemetry_lag
+                    .with_label_values(&[&exp.to_string()])
+                    .set(sum as f64 / n.max(1) as f64 / 1000.0);
             }
             worker_metrics
                 .export_queue_depth

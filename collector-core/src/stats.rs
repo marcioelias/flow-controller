@@ -667,6 +667,12 @@ pub struct Overview {
     pub storage_bytes: u64,
     /// Dias entre o flow mais antigo armazenado e agora
     pub storage_days: u64,
+    /// % de pacotes UDP descartados por backpressure (acumulado do processo)
+    pub collector_drop_pct: f64,
+    /// Maior atraso flowEnd→chegada entre exporters (s)
+    pub telemetry_lag_secs: f64,
+    /// Alertas por hora, 24 posições (mais antiga → mais recente)
+    pub alerts_by_hour: Vec<u64>,
 }
 
 pub async fn get_overview_handler(
@@ -756,6 +762,38 @@ pub async fn get_overview_handler(
             .map(|(_, v)| v[0] * 8 / 60)
             .max()
             .unwrap_or(0);
+    }
+
+    // ── saúde do coletor: perda por backpressure + lag de telemetria ──
+    {
+        let received = state.metrics.packets_received.get();
+        let dropped = state.metrics.packets_dropped.get();
+        if received > 0 {
+            ov.collector_drop_pct = dropped as f64 / received as f64 * 100.0;
+        }
+        ov.telemetry_lag_secs = state.metrics.telemetry_lag_max();
+    }
+
+    // ── sparkline: alertas por hora nas últimas 24h (SQLite) ──
+    {
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT CAST((strftime('%s','now') - strftime('%s', created_at)) / 3600 AS INTEGER) \
+                    AS hours_ago, COUNT(*) \
+             FROM alert_events \
+             WHERE created_at >= datetime('now', '-24 hours') \
+             GROUP BY hours_ago",
+        )
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        let mut spark = vec![0u64; 24];
+        for (hours_ago, n) in rows {
+            let idx = 23i64.saturating_sub(hours_ago);
+            if (0..24).contains(&idx) {
+                spark[idx as usize] = n as u64;
+            }
+        }
+        ov.alerts_by_hour = spark;
     }
 
     // ── active talkers / exporters (last 5 min) ──
