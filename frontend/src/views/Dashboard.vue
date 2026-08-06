@@ -10,7 +10,7 @@ import {
 } from 'chart.js'
 import {
   LayoutDashboard, Activity, Wifi, BarChart2, ArrowDown, ArrowUp,
-  Gauge, Zap, Users, Bell, Radio, Flame,
+  Gauge, Zap, Users, Bell, Radio, Flame, Globe2, Database,
 } from 'lucide-vue-next'
 import { formatBytes } from '../utils/format'
 import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from '../composables/useLiveTraffic'
@@ -35,6 +35,9 @@ interface Overview {
   bgp_sessions_up: number; bgp_sessions_total: number
   top_protocol: string
   sampling_exporters: { exporter_ip: string; rate: number }[]
+  v6_share_pct: number
+  storage_bytes: number
+  storage_days: number
 }
 interface TopTalker { src_ip: string; total_bytes: number; in_bytes: number; out_bytes: number }
 interface AlertEvent { id: number; src_ip: string; alert_type: string; severity: string; message: string; created_at: string }
@@ -382,7 +385,7 @@ onUnmounted(() => {
       </div>
 
       <!-- NOC stat tiles -->
-      <div v-if="overview" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+      <div v-if="overview" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-3">
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
           <div class="flex items-center justify-between mb-2">
             <span
@@ -474,6 +477,24 @@ onUnmounted(() => {
             {{ overview.alerts_24h }}
           </p>
           <p class="text-[11px] text-zinc-500 mt-0.5">{{ overview.alerts_active }} na última hora</p>
+        </div>
+
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">IPv6</span>
+            <Globe2 class="w-3.5 h-3.5 text-sky-400" />
+          </div>
+          <p class="text-xl font-bold text-slate-100 tabular-nums leading-tight">{{ overview.v6_share_pct.toFixed(1) }}%</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5">do volume na janela</p>
+        </div>
+
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Armazenamento</span>
+            <Database class="w-3.5 h-3.5 text-violet-400" />
+          </div>
+          <p class="text-xl font-bold text-slate-100 tabular-nums leading-tight">{{ formatBytes(overview.storage_bytes) }}</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5">{{ overview.storage_days }}d de histórico (comprimido)</p>
         </div>
       </div>
 
