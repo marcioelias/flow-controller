@@ -7,14 +7,27 @@ pub async fn bgp_session_monitor(
     sessions: Arc<std::sync::RwLock<HashMap<String, crate::bgp::BgpSessionState>>>,
     out_pipe_path: String,
 ) {
+    // Sem ExaBGP (dev local) o pipe não existe: backoff exponencial até 60s
+    // e log só na transição de estado — warn a cada 5s era puro ruído
+    let mut delay_secs: u64 = 5;
+    let mut was_failing = false;
     loop {
         match try_monitor(&pool, &sessions, &out_pipe_path).await {
             Ok(()) => {
                 tracing::info!("BGP session monitor: pipe EOF, restarting...");
+                delay_secs = 5;
+                was_failing = false;
             }
             Err(e) => {
-                tracing::warn!("BGP session monitor error: {}. Retrying in 5s", e);
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if !was_failing {
+                    tracing::warn!(
+                        "BGP session monitor unavailable: {} — backing off (up to 60s)",
+                        e
+                    );
+                    was_failing = true;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                delay_secs = (delay_secs * 2).min(60);
             }
         }
     }

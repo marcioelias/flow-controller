@@ -661,6 +661,12 @@ pub struct Overview {
     pub bgp_sessions_total: u64,
     pub top_protocol: String,
     pub sampling_exporters: Vec<SamplingExporter>,
+    /// Fatia do IPv6 no volume da janela, 0–100 (task 16.x — tile NOC)
+    pub v6_share_pct: f64,
+    /// Bytes em disco das tabelas de flow (compressão inclusa)
+    pub storage_bytes: u64,
+    /// Dias entre o flow mais antigo armazenado e agora
+    pub storage_days: u64,
 }
 
 pub async fn get_overview_handler(
@@ -671,13 +677,14 @@ pub async fn get_overview_handler(
     let mut ov = Overview::default();
 
     // ── 1-minute buckets over the window (both tables, merged in Rust) ──
+    // A coluna literal `fam` permite o share v6 sem uma segunda varredura
     let bucket_sql = format!(
-        "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, \
+        "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, 4 AS fam, \
                 sum(bytes) AS b, sum(packets) AS p, sum(flow_count) AS f, \
                 sumIf(bytes, direction = 1) AS out_b \
          FROM network_flows_v4 WHERE timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
          UNION ALL \
-         SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, \
+         SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, 6 AS fam, \
                 sum(bytes) AS b, sum(packets) AS p, sum(flow_count) AS f, \
                 sumIf(bytes, direction = 1) AS out_b \
          FROM network_flows_v6 WHERE timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
@@ -685,13 +692,39 @@ pub async fn get_overview_handler(
     );
     let val = ch_query(&bucket_sql).await?;
     let mut buckets: BTreeMap<u64, [u64; 4]> = BTreeMap::new();
+    let mut v6_bytes: u64 = 0;
+    let mut all_bytes: u64 = 0;
     for row in val["data"].as_array().cloned().unwrap_or_default() {
         let m = parse_u64_field(&row["minute"]);
+        let b = parse_u64_field(&row["b"]);
         let e = buckets.entry(m).or_insert([0; 4]);
-        e[0] += parse_u64_field(&row["b"]);
+        e[0] += b;
         e[1] += parse_u64_field(&row["p"]);
         e[2] += parse_u64_field(&row["f"]);
         e[3] += parse_u64_field(&row["out_b"]);
+        all_bytes += b;
+        if parse_u64_field(&row["fam"]) == 6 {
+            v6_bytes += b;
+        }
+    }
+    if all_bytes > 0 {
+        ov.v6_share_pct = (v6_bytes as f64 / all_bytes as f64) * 100.0;
+    }
+
+    // ── armazenamento: bytes em disco + idade do dado mais antigo ──
+    let storage_sql = "SELECT sum(bytes_on_disk) AS disk, \
+                toUnixTimestamp(min(min_time)) AS oldest \
+         FROM system.parts \
+         WHERE active AND table IN ('network_flows_v4', 'network_flows_v6') \
+         FORMAT JSON";
+    if let Ok(val) = ch_query(storage_sql).await {
+        if let Some(row) = val["data"].as_array().and_then(|a| a.first()) {
+            ov.storage_bytes = parse_u64_field(&row["disk"]);
+            let oldest = parse_u64_field(&row["oldest"]);
+            if oldest > 0 {
+                ov.storage_days = (unix_now().saturating_sub(oldest)) / 86_400;
+            }
+        }
     }
 
     if !buckets.is_empty() {

@@ -40,10 +40,14 @@ async fn refresh_whitelist(pool: sqlx::SqlitePool, set: AllowedSet) {
     loop {
         match exporters::fetch_enabled_ips(&pool).await {
             Ok(ips) => {
-                set.clear();
-                for ip in ips {
-                    set.insert(ip);
+                // Diff, nunca clear+insert: entre o clear e o primeiro insert
+                // os receptores viam o set vazio e bloqueavam exporter válido
+                // por alguns micros a cada 30s
+                let fresh: std::collections::HashSet<Ipv4Addr> = ips.into_iter().collect();
+                for ip in &fresh {
+                    set.insert(*ip);
                 }
+                set.retain(|ip| fresh.contains(ip));
             }
             Err(e) => tracing::error!("whitelist refresh error: {e}"),
         }
@@ -799,7 +803,9 @@ fn main() -> anyhow::Result<()> {
                     }
 
                     // Live dashboard stays at 1s cadence: broadcast per window,
-                    // before merging
+                    // before merging. Sem cliente WS, os mapas/fatias seriam
+                    // montados e jogados fora — só os escalares são de graça.
+                    let live_wanted = ws_tx.receiver_count() > 0;
                     let mut window_total_bytes = 0;
                     let mut window_bytes_in = 0u64;
                     let mut window_bytes_out = 0u64;
@@ -818,37 +824,45 @@ fn main() -> anyhow::Result<()> {
                         std::collections::HashMap::new();
                     for ((slice_sec, key), m) in map.iter() {
                         window_total_bytes += m.bytes;
-                        {
+                        if live_wanted {
                             let t = slice_totals.entry(*slice_sec).or_default();
                             let v6 = matches!(key.src_ip, flow_types::IpAddrType::V6(_));
                             let out = key.direction == flow_types::DIRECTION_EGRESS;
                             t[usize::from(v6) * 2 + usize::from(out)] += m.bytes;
                         }
-                        *per_device_bytes
-                            .entry(key.exporter_ip.to_string())
-                            .or_insert(0) += m.bytes;
+                        if live_wanted {
+                            *per_device_bytes
+                                .entry(key.exporter_ip.to_string())
+                                .or_insert(0) += m.bytes;
+                        }
 
                         let seen = dir_seen.entry(key.exporter_ip).or_default();
                         match key.direction {
                             flow_types::DIRECTION_INGRESS => {
                                 seen.0 = true;
                                 window_bytes_in += m.bytes;
-                                *per_device_in
-                                    .entry(key.exporter_ip.to_string())
-                                    .or_insert(0) += m.bytes;
+                                if live_wanted {
+                                    *per_device_in
+                                        .entry(key.exporter_ip.to_string())
+                                        .or_insert(0) += m.bytes;
+                                }
                             }
                             flow_types::DIRECTION_EGRESS => {
                                 seen.1 = true;
                                 window_bytes_out += m.bytes;
-                                *per_device_out
-                                    .entry(key.exporter_ip.to_string())
-                                    .or_insert(0) += m.bytes;
+                                if live_wanted {
+                                    *per_device_out
+                                        .entry(key.exporter_ip.to_string())
+                                        .or_insert(0) += m.bytes;
+                                }
                             }
                             _ => {
                                 window_bytes_in += m.bytes;
-                                *per_device_in
-                                    .entry(key.exporter_ip.to_string())
-                                    .or_insert(0) += m.bytes;
+                                if live_wanted {
+                                    *per_device_in
+                                        .entry(key.exporter_ip.to_string())
+                                        .or_insert(0) += m.bytes;
+                                }
                             }
                         }
 
