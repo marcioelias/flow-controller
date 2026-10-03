@@ -139,6 +139,16 @@ Note: ASN labels are static strings ("AS{number}") until a GeoIP/ASN database is
 
 ---
 
+### GET /api/stats/talker  ← NEW (task 17.1)
+Detail for one IP: upload (IP as source) / download (IP as destination) rate series,
+aggregated conversations `(peer, protocol, service port)` and top service ports.
+
+**Query params:** `ip` (required, IPv4 or IPv6), `minutes?` (default 5, max 1440), `exporter_ip?`
+
+**Response 200:** see `tasks/task-17.1-talker-detail.md`. **400** on invalid `ip`, **402** when the license is degraded.
+
+---
+
 ### GET /api/stats/ports  ← NEW (task 2.3)
 Top destination ports by byte volume.
 
