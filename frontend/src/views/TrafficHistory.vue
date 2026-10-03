@@ -313,23 +313,31 @@ onUnmounted(() => {
 
         <!-- Barra de stats mín/máx/méd/95% (task 13.9) -->
         <div v-if="points.length > 0 && hasDirection" class="mt-4 pt-3 border-t border-zinc-800 grid grid-cols-2 gap-4 text-xs">
-          <div class="flex items-center gap-3 flex-wrap">
-            <span class="flex items-center gap-1.5 font-medium text-zinc-300">
-              <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_IN }"></span> Entrada
-            </span>
-            <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsIn.min.toFixed(1) }}</span></span>
-            <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsIn.max.toFixed(1) }}</span></span>
-            <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsIn.avg.toFixed(1) }}</span></span>
-            <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsIn.p95.toFixed(1) }}</span> Mbps</span>
+          <div class="space-y-1">
+            <div class="flex items-center gap-3 flex-wrap">
+              <span class="flex items-center gap-1.5 font-medium text-zinc-300">
+                <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_IN }"></span> Entrada
+              </span>
+              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsIn.min.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsIn.max.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsIn.avg.toFixed(1) }}</span></span>
+            </div>
+            <div class="pl-3.5">
+              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsIn.p95.toFixed(1) }}</span> Mbps</span>
+            </div>
           </div>
-          <div class="flex items-center gap-3 flex-wrap">
-            <span class="flex items-center gap-1.5 font-medium text-zinc-300">
-              <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_OUT }"></span> Saída
-            </span>
-            <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsOut.min.toFixed(1) }}</span></span>
-            <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsOut.max.toFixed(1) }}</span></span>
-            <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsOut.avg.toFixed(1) }}</span></span>
-            <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsOut.p95.toFixed(1) }}</span> Mbps</span>
+          <div class="space-y-1">
+            <div class="flex items-center gap-3 flex-wrap">
+              <span class="flex items-center gap-1.5 font-medium text-zinc-300">
+                <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_OUT }"></span> Saída
+              </span>
+              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsOut.min.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsOut.max.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsOut.avg.toFixed(1) }}</span></span>
+            </div>
+            <div class="pl-3.5">
+              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsOut.p95.toFixed(1) }}</span> Mbps</span>
+            </div>
           </div>
         </div>
       </div>
