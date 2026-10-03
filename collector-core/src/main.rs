@@ -737,6 +737,7 @@ fn main() -> anyhow::Result<()> {
                 "/api/alerts/events",
                 get(alert_api::list_events).delete(alert_api::clear_events),
             )
+            .route("/api/alerts/events/:id", get(alert_api::get_event))
             .route(
                 "/api/alerts/telegram",
                 get(alert_api::get_telegram).put(alert_api::update_telegram),

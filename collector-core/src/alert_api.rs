@@ -241,12 +241,89 @@ pub struct EventsQuery {
     pub offset: Option<i64>,
     pub severity: Option<String>,
     pub notified: Option<String>,
+    pub sort: Option<String>,
+    pub dir: Option<String>,
+}
+
+/// Event plus the rule's short window, so rates can be derived from the
+/// window-summed upload/download bytes (task 17.4 R-03)
+#[derive(Serialize)]
+pub struct EventRow {
+    #[serde(flatten)]
+    pub event: AlertEvent,
+    pub window_min: Option<i64>,
 }
 
 #[derive(Serialize)]
 pub struct EventsResponse {
     pub total: i64,
-    pub events: Vec<AlertEvent>,
+    pub events: Vec<EventRow>,
+}
+
+#[derive(Serialize)]
+pub struct EventRule {
+    pub id: i64,
+    pub name: String,
+    pub rule_type: String,
+    pub params: serde_json::Value,
+}
+
+#[derive(Serialize)]
+pub struct EventDetail {
+    #[serde(flatten)]
+    pub event: AlertEvent,
+    pub window_min: Option<i64>,
+    pub explanation: Option<String>,
+    pub feedback: Option<String>,
+    pub exporter_name: Option<String>,
+    pub rule: Option<EventRule>,
+}
+
+const EVENT_COLUMNS: &str = "e.id, e.rule_id, e.exporter_ip, e.src_ip, e.alert_type, e.severity, \
+     e.message, e.upload_bytes, e.download_bytes, e.pps, e.avg_pkt_bytes, e.attack_ports, \
+     e.notified, e.bgp_announced, e.created_at, \
+     json_extract(r.params, '$.short_window_min') AS window_min";
+
+/// Whitelisted sort columns (task 17.3 R-05); anything else falls back to time
+fn event_order_by(sort: Option<&str>, dir: Option<&str>) -> String {
+    let col = match sort {
+        Some("severity") => "CASE e.severity WHEN 'critical' THEN 2 ELSE 1 END",
+        Some("alert_type") => "e.alert_type",
+        Some("exporter_ip") => "e.exporter_ip",
+        Some("src_ip") => "e.src_ip",
+        Some("notified") => "e.notified",
+        Some("bgp_announced") => "e.bgp_announced",
+        _ => "e.created_at",
+    };
+    let dir = if dir == Some("asc") { "ASC" } else { "DESC" };
+    format!("{col} {dir}, e.id {dir}")
+}
+
+fn event_from_row(r: &sqlx::sqlite::SqliteRow) -> AlertEvent {
+    AlertEvent {
+        id: r.try_get("id").ok(),
+        rule_id: r.try_get("rule_id").ok().flatten(),
+        exporter_ip: r.try_get("exporter_ip").unwrap_or_default(),
+        src_ip: r.try_get("src_ip").unwrap_or_default(),
+        alert_type: r.try_get("alert_type").unwrap_or_default(),
+        severity: {
+            let s: &str = r.try_get("severity").unwrap_or("warning");
+            if s == "critical" {
+                AlertSeverity::Critical
+            } else {
+                AlertSeverity::Warning
+            }
+        },
+        message: r.try_get("message").unwrap_or_default(),
+        upload_bytes: r.try_get("upload_bytes").ok().flatten(),
+        download_bytes: r.try_get("download_bytes").ok().flatten(),
+        pps: r.try_get("pps").ok().flatten(),
+        avg_pkt_bytes: r.try_get("avg_pkt_bytes").ok().flatten(),
+        attack_ports: r.try_get("attack_ports").ok().flatten(),
+        notified: r.try_get::<i64, _>("notified").unwrap_or(0) != 0,
+        bgp_announced: r.try_get::<i64, _>("bgp_announced").unwrap_or(0) != 0,
+        created_at: r.try_get("created_at").ok().flatten(),
+    }
 }
 
 pub async fn list_events(
@@ -256,31 +333,32 @@ pub async fn list_events(
     let limit = q.limit.unwrap_or(50).min(500);
     let offset = q.offset.unwrap_or(0);
 
-    let mut conditions = vec!["1=1".to_string()];
-    if let Some(sev) = &q.severity {
-        conditions.push(format!("severity = '{}'", sev.replace('\'', "")));
+    let mut conditions = vec!["1=1"];
+    match q.severity.as_deref() {
+        Some("warning") => conditions.push("e.severity = 'warning'"),
+        Some("critical") => conditions.push("e.severity = 'critical'"),
+        _ => {}
     }
-    if let Some(notified) = &q.notified {
-        let val = if notified == "true" { "1" } else { "0" };
-        conditions.push(format!("notified = {val}"));
+    match q.notified.as_deref() {
+        Some("true") => conditions.push("e.notified = 1"),
+        Some("false") => conditions.push("e.notified = 0"),
+        _ => {}
     }
-
     let where_clause = conditions.join(" AND ");
+    let order_by = event_order_by(q.sort.as_deref(), q.dir.as_deref());
 
     let total: i64 = sqlx::query_scalar(&format!(
-        "SELECT COUNT(*) FROM alert_events WHERE {where_clause}"
+        "SELECT COUNT(*) FROM alert_events e WHERE {where_clause}"
     ))
     .fetch_one(&state.db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let rows = sqlx::query(&format!(
-        "SELECT id, rule_id, exporter_ip, src_ip, alert_type, severity, message,
-                upload_bytes, download_bytes, pps, avg_pkt_bytes, attack_ports,
-                notified, created_at
-         FROM alert_events
+        "SELECT {EVENT_COLUMNS}
+         FROM alert_events e LEFT JOIN alert_rules r ON r.id = e.rule_id
          WHERE {where_clause}
-         ORDER BY created_at DESC LIMIT ? OFFSET ?"
+         ORDER BY {order_by} LIMIT ? OFFSET ?"
     ))
     .bind(limit)
     .bind(offset)
@@ -288,35 +366,59 @@ pub async fn list_events(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let events: Vec<AlertEvent> = rows
-        .into_iter()
-        .map(|r| AlertEvent {
-            id: r.try_get("id").ok(),
-            rule_id: r.try_get("rule_id").ok().flatten(),
-            exporter_ip: r.try_get("exporter_ip").unwrap_or_default(),
-            src_ip: r.try_get("src_ip").unwrap_or_default(),
-            alert_type: r.try_get("alert_type").unwrap_or_default(),
-            severity: {
-                let s: &str = r.try_get("severity").unwrap_or("warning");
-                if s == "critical" {
-                    AlertSeverity::Critical
-                } else {
-                    AlertSeverity::Warning
-                }
-            },
-            message: r.try_get("message").unwrap_or_default(),
-            upload_bytes: r.try_get("upload_bytes").ok().flatten(),
-            download_bytes: r.try_get("download_bytes").ok().flatten(),
-            pps: r.try_get("pps").ok().flatten(),
-            avg_pkt_bytes: r.try_get("avg_pkt_bytes").ok().flatten(),
-            attack_ports: r.try_get("attack_ports").ok().flatten(),
-            notified: r.try_get::<i64, _>("notified").unwrap_or(0) != 0,
-            bgp_announced: r.try_get::<i64, _>("bgp_announced").unwrap_or(0) != 0,
-            created_at: r.try_get("created_at").ok().flatten(),
+    let events = rows
+        .iter()
+        .map(|r| EventRow {
+            event: event_from_row(r),
+            window_min: r.try_get("window_min").ok().flatten(),
         })
         .collect();
 
     Ok(Json(EventsResponse { total, events }))
+}
+
+pub async fn get_event(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<EventDetail>, StatusCode> {
+    let row = sqlx::query(&format!(
+        "SELECT {EVENT_COLUMNS}, e.explanation, e.feedback,
+                r.id AS r_id, r.name AS r_name, r.rule_type AS r_type, r.params AS r_params,
+                x.name AS exporter_name
+         FROM alert_events e
+         LEFT JOIN alert_rules r ON r.id = e.rule_id
+         LEFT JOIN exporters x ON x.ip_address = e.exporter_ip
+         WHERE e.id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    let rule = row
+        .try_get::<Option<i64>, _>("r_id")
+        .ok()
+        .flatten()
+        .map(|rid| EventRule {
+            id: rid,
+            name: row.try_get("r_name").unwrap_or_default(),
+            rule_type: row.try_get("r_type").unwrap_or_default(),
+            params: row
+                .try_get::<String, _>("r_params")
+                .ok()
+                .and_then(|p| serde_json::from_str(&p).ok())
+                .unwrap_or(serde_json::Value::Null),
+        });
+
+    Ok(Json(EventDetail {
+        event: event_from_row(&row),
+        window_min: row.try_get("window_min").ok().flatten(),
+        explanation: row.try_get("explanation").ok().flatten(),
+        feedback: row.try_get("feedback").ok().flatten(),
+        exporter_name: row.try_get("exporter_name").ok().flatten(),
+        rule,
+    }))
 }
 
 pub async fn clear_events(State(state): State<Arc<AppState>>) -> StatusCode {

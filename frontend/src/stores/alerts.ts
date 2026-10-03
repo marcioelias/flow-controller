@@ -28,6 +28,14 @@ export interface AlertEvent {
   notified: boolean
   bgp_announced: boolean
   created_at: string | null
+  window_min: number | null
+}
+
+export interface AlertEventDetail extends AlertEvent {
+  explanation: string | null
+  feedback: string | null
+  exporter_name: string | null
+  rule: { id: number; name: string; rule_type: string; params: Record<string, unknown> } | null
 }
 
 export interface EventsResponse {
@@ -116,8 +124,12 @@ export const useAlertsStore = defineStore('alerts', () => {
     return result
   }
 
-  async function loadEvents(params?: { limit?: number; offset?: number; severity?: string; notified?: string }) {
+  async function loadEvents(params?: {
+    limit?: number; offset?: number; severity?: string; notified?: string; sort?: string; dir?: string
+  }) {
     const qs = new URLSearchParams()
+    if (params?.sort) qs.set('sort', params.sort)
+    if (params?.dir) qs.set('dir', params.dir)
     if (params?.limit) qs.set('limit', String(params.limit))
     if (params?.offset) qs.set('offset', String(params.offset))
     if (params?.severity) qs.set('severity', params.severity)
@@ -128,6 +140,10 @@ export const useAlertsStore = defineStore('alerts', () => {
     events.value = resp.events
     eventsTotal.value = resp.total
     return resp
+  }
+
+  async function getEvent(id: number) {
+    return apiCall<AlertEventDetail>('GET', `/api/alerts/events/${id}`)
   }
 
   async function clearEvents() {
@@ -153,7 +169,7 @@ export const useAlertsStore = defineStore('alerts', () => {
   return {
     rules, events, eventsTotal, telegram, loading, error,
     loadRules, createRule, updateRule, deleteRule, toggleRule,
-    loadEvents, clearEvents,
+    loadEvents, getEvent, clearEvents,
     loadTelegram, saveTelegram, testTelegram,
   }
 })
