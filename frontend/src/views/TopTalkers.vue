@@ -16,6 +16,7 @@ import { Users, RefreshCw, Search } from 'lucide-vue-next'
 import { formatBps, formatNumber } from '../utils/format'
 import { useSort } from '../composables/useSort'
 import SortTh from '../components/SortTh.vue'
+import NetClassBadge from '../components/NetClassBadge.vue'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
@@ -35,6 +36,7 @@ interface TopTalker {
   flow_count: number
   p95_bps: number
   avg_bps: number
+  ip_class: 'cgnat' | 'internal' | 'internet'
 }
 
 const exporters = ref<Exporter[]>([])
@@ -252,7 +254,8 @@ onUnmounted(() => {
             >
               <td class="px-6 py-3 text-zinc-500 font-mono">{{ rows.indexOf(row) + 1 }}</td>
               <td class="px-6 py-3 font-mono" :class="row.src_ip === 'outros' ? 'text-zinc-500 italic' : 'text-slate-200'">
-                {{ row.src_ip === 'outros' ? 'Outros — além do limite da licença' : row.src_ip }}
+                <span v-if="row.src_ip === 'outros'">Outros — além do limite da licença</span>
+                <span v-else class="inline-flex items-center gap-1.5">{{ row.src_ip }} <NetClassBadge :cls="row.ip_class" /></span>
               </td>
               <td class="px-6 py-3 text-right text-emerald-400 font-medium tabular-nums">{{ row.src_ip === 'outros' ? '—' : formatBps(row.p95_bps) }}</td>
               <td class="px-6 py-3 text-right text-slate-200 tabular-nums">{{ formatBps(row.avg_bps) }}</td>

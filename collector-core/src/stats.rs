@@ -137,6 +137,8 @@ pub struct TopTalkerRow {
     pub unknown_bytes: u64,
     pub p95_bps: u64,
     pub avg_bps: u64,
+    /// cgnat | internal | internet (task 17.7)
+    pub ip_class: &'static str,
 }
 
 pub async fn get_top_talkers_handler(
@@ -155,11 +157,11 @@ pub async fn get_top_talkers_handler(
         format!(
             "SELECT toString(src_ip) AS src_ip, sum(b) AS total_bytes, sum(p) AS total_packets, \
                     sum(f) AS flow_count, sum(ib) AS in_bytes, sum(ob) AS out_bytes, \
-                    sum(ub) AS unknown_bytes, {p95} AS p95_bps FROM (\
+                    sum(ub) AS unknown_bytes, {p95} AS p95_bps, max(sa) AS src_asn FROM (\
                SELECT src_ip, toStartOfMinute(timestamp) AS minute, sum(bytes) AS b, \
                       sum(packets) AS p, sum(flow_count) AS f, \
                       sumIf(bytes, direction = 0) AS ib, sumIf(bytes, direction = 1) AS ob, \
-                      sumIf(bytes, direction = 255) AS ub \
+                      sumIf(bytes, direction = 255) AS ub, any(src_asn) AS sa \
                FROM {table} {wc} GROUP BY src_ip, minute\
              ) GROUP BY src_ip ORDER BY p95_bps DESC, total_bytes DESC LIMIT {limit}"
         )
@@ -172,9 +174,22 @@ pub async fn get_top_talkers_handler(
     );
 
     let val = ch_query(&sql).await?;
+    let asns: HashMap<String, u32> = val["data"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|r| {
+                    let ip = r["src_ip"].as_str().unwrap_or_default().to_string();
+                    (ip, parse_u64_field(&r["src_asn"]) as u32)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let classifier = crate::netclass::NetClassifier::load(&state.db).await;
     let mut rows: Vec<TopTalkerRow> = parse_rows::<TopTalkerRowRaw>(&val);
     for r in &mut rows {
         r.avg_bps = avg_bps(r.total_bytes, minutes);
+        r.ip_class = classifier.classify_str(&r.src_ip, asns.get(&r.src_ip).copied().unwrap_or(0));
     }
     rows.sort_by(|a, b| {
         b.p95_bps
@@ -209,6 +224,7 @@ pub async fn get_top_talkers_handler(
                     unknown_bytes: 0,
                     p95_bps: 0,
                     avg_bps: avg_bps(grand - shown, minutes),
+                    ip_class: "internet",
                 });
             }
         }
@@ -240,6 +256,7 @@ impl From<TopTalkerRowRaw> for TopTalkerRow {
             unknown_bytes: r.unknown_bytes.into(),
             p95_bps: r.p95_bps.into(),
             avg_bps: 0,
+            ip_class: "internet",
         }
     }
 }
@@ -951,6 +968,8 @@ pub struct TalkerQuery {
     pub ip: String,
     pub minutes: Option<u32>,
     pub exporter_ip: Option<String>,
+    /// all | internet | internal — filters by the peer's class (task 17.7)
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -964,6 +983,7 @@ pub struct TalkerPoint {
 pub struct TalkerConversation {
     pub peer: String,
     pub peer_asn: u64,
+    pub peer_class: &'static str,
     pub protocol: u64,
     pub port: u64,
     pub up_bytes: u64,
@@ -985,6 +1005,8 @@ pub struct TalkerPort {
 #[derive(Debug, Serialize)]
 pub struct TalkerDetail {
     pub ip: String,
+    pub ip_class: &'static str,
+    pub scope: &'static str,
     pub bucket_secs: u64,
     pub from: u64,
     pub to: u64,
@@ -1014,9 +1036,18 @@ pub async fn get_talker_handler(
         Some(e) => format!("exporter_ip = '{e}' AND "),
         None => String::new(),
     };
+    let classifier = crate::netclass::NetClassifier::load(&state.db).await;
+    let peer_ip = format!("if(src_ip = {x}, dst_ip, src_ip)");
+    let peer_asn = format!("if(src_ip = {x}, dst_asn, src_asn)");
+    let peer_internal = classifier.sql_internal(&peer_ip, &peer_asn, ip.is_ipv6());
+    let (scope, scope_cond) = match params.scope.as_deref() {
+        Some("internet") => ("internet", format!(" AND NOT {peer_internal}")),
+        Some("internal") => ("internal", format!(" AND {peer_internal}")),
+        _ => ("all", String::new()),
+    };
     let filter = format!(
         "FROM {table} WHERE {device}timestamp >= now() - INTERVAL {minutes} MINUTE \
-         AND (src_ip = {x} OR dst_ip = {x})"
+         AND (src_ip = {x} OR dst_ip = {x}){scope_cond}"
     );
     let up = format!("sumIf(bytes, src_ip = {x}) AS up_bytes");
     let down = format!("sumIf(bytes, dst_ip = {x}) AS down_bytes");
@@ -1025,11 +1056,12 @@ pub async fn get_talker_handler(
 
     let series_sql = format!(
         "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL {bucket_secs} SECOND)) AS t, \
-                {up}, {down} {filter} GROUP BY t ORDER BY t FORMAT JSON"
+                {up}, {down}, anyIf(src_asn, src_ip = {x}) AS self_asn \
+         {filter} GROUP BY t ORDER BY t FORMAT JSON"
     );
     let conv_sql = format!(
-        "SELECT toString(if(src_ip = {x}, dst_ip, src_ip)) AS peer, \
-                if(src_ip = {x}, dst_asn, src_asn) AS peer_asn, protocol, {port}, {up}, {down}, \
+        "SELECT toString({peer_ip}) AS peer, \
+                {peer_asn} AS peer_asn, protocol, {port}, {up}, {down}, \
                 sum(packets) AS packets, \
                 toUnixTimestamp(min(timestamp)) AS first_seen, \
                 toUnixTimestamp(max(timestamp)) AS last_seen \
@@ -1038,7 +1070,7 @@ pub async fn get_talker_handler(
     );
     let ports_sql = format!(
         "SELECT protocol, {port}, {up}, {down}, \
-                uniq(if(src_ip = {x}, dst_ip, src_ip)) AS peers \
+                uniq({peer_ip}) AS peers \
          {filter} GROUP BY protocol, port \
          ORDER BY up_bytes + down_bytes DESC LIMIT 20 FORMAT JSON"
     );
@@ -1050,7 +1082,7 @@ pub async fn get_talker_handler(
     )?;
     let data = |v: &serde_json::Value| v["data"].as_array().cloned().unwrap_or_default();
 
-    let (mut up_bytes, mut down_bytes) = (0u64, 0u64);
+    let (mut up_bytes, mut down_bytes, mut self_asn) = (0u64, 0u64, 0u64);
     let series: Vec<TalkerPoint> = data(&series_val)
         .iter()
         .map(|r| {
@@ -1058,6 +1090,7 @@ pub async fn get_talker_handler(
             let down = parse_u64_field(&r["down_bytes"]);
             up_bytes += up;
             down_bytes += down;
+            self_asn = self_asn.max(parse_u64_field(&r["self_asn"]));
             TalkerPoint {
                 t: parse_u64_field(&r["t"]),
                 up_bps: up * 8 / bucket_secs,
@@ -1075,6 +1108,10 @@ pub async fn get_talker_handler(
         .map(|r| TalkerConversation {
             peer: r["peer"].as_str().unwrap_or_default().to_string(),
             peer_asn: parse_u64_field(&r["peer_asn"]),
+            peer_class: classifier.classify_str(
+                r["peer"].as_str().unwrap_or_default(),
+                parse_u64_field(&r["peer_asn"]) as u32,
+            ),
             protocol: parse_u64_field(&r["protocol"]),
             port: parse_u64_field(&r["port"]),
             up_bytes: parse_u64_field(&r["up_bytes"]),
@@ -1099,6 +1136,8 @@ pub async fn get_talker_handler(
     let to = unix_now();
     Ok(Json(TalkerDetail {
         ip: ip.to_string(),
+        ip_class: classifier.classify(ip, self_asn as u32),
+        scope,
         bucket_secs,
         from: to - minutes as u64 * 60,
         to,

@@ -108,7 +108,7 @@ Returns protocol byte distribution.
 ---
 
 ### GET /api/stats/top-talkers  ← NEW (task 2.1)
-Top source IPs ranked by p95 rate (complete 1-minute buckets, zero-filled; task 17.2).
+Top source IPs ranked by p95 rate (complete 1-minute buckets, zero-filled; task 17.2). Each row carries `ip_class` (`cgnat|internal|internet`, task 17.7).
 
 **Query params:** `exporter_ip?`, `minutes?` (default 5), `limit?` (default 20, max 100)
 
@@ -144,7 +144,10 @@ Note: ASN labels are static strings ("AS{number}") until a GeoIP/ASN database is
 Detail for one IP: upload (IP as source) / download (IP as destination) rate series,
 aggregated conversations `(peer, protocol, service port)` and top service ports.
 
-**Query params:** `ip` (required, IPv4 or IPv6), `minutes?` (default 5, max 1440), `exporter_ip?`
+**Query params:** `ip` (required, IPv4 or IPv6), `minutes?` (default 5, max 1440), `exporter_ip?`,
+`scope?` (`all|internet|internal`, filters by the peer's class — task 17.7)
+
+Response adds `ip_class` and per-conversation `peer_class` (`cgnat|internal|internet`).
 
 **Response 200:** see `tasks/task-17.1-talker-detail.md`. **400** on invalid `ip`, **402** when the license is degraded.
 

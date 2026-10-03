@@ -17,6 +17,7 @@ import { ArrowLeft, ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, Search } from 'l
 import { bytesToBps, formatBps, formatBytes, formatNumber } from '../utils/format'
 import { useSort } from '../composables/useSort'
 import SortTh from '../components/SortTh.vue'
+import NetClassBadge from '../components/NetClassBadge.vue'
 import {
   COLOR_IN,
   COLOR_OUT,
@@ -38,9 +39,13 @@ interface Exporter {
   name: string
 }
 
+type NetClass = 'cgnat' | 'internal' | 'internet'
+type Scope = 'all' | 'internet' | 'internal'
+
 interface Conversation {
   peer: string
   peer_asn: number
+  peer_class: NetClass
   protocol: number
   port: number
   up_bytes: number
@@ -60,6 +65,8 @@ interface PortRow {
 
 interface TalkerDetail {
   ip: string
+  ip_class: NetClass
+  scope: Scope
   bucket_secs: number
   from: number
   to: number
@@ -81,6 +88,22 @@ const loading = ref(false)
 const paywalled = ref(false)
 const invalidIp = ref(false)
 const flip = ref(loadMirrorFlip())
+const scope = ref<Scope>('all')
+const scopeOptions: { v: Scope; label: string }[] = [
+  { v: 'all', label: 'Todos' },
+  { v: 'internet', label: 'Internet' },
+  { v: 'internal', label: 'Interno' },
+]
+function setScope(v: Scope) {
+  scope.value = v
+  loadData()
+}
+// Assinante CGNAT falando com o próprio ASN: o destino final é resolvido no NAT
+const showCgnatHint = computed(
+  () =>
+    detail.value?.ip_class === 'cgnat' &&
+    detail.value.conversations.some((c) => c.peer_class !== 'internet'),
+)
 
 const minuteOptions = [
   { label: 'Últimos 5m', value: 5 },
@@ -197,7 +220,11 @@ async function loadExporters() {
 async function loadData() {
   loading.value = true
   try {
-    const params = new URLSearchParams({ ip: ip.value, minutes: String(selectedMinutes.value) })
+    const params = new URLSearchParams({
+      ip: ip.value,
+      minutes: String(selectedMinutes.value),
+      scope: scope.value,
+    })
     if (selectedDevice.value) params.set('exporter_ip', selectedDevice.value)
     const res = await fetch(`/api/stats/talker?${params}`, { headers: authStore.getAuthHeaders() })
     paywalled.value = res.status === 402
@@ -267,6 +294,7 @@ onUnmounted(() => {
               <ArrowLeft class="w-6 h-6" />
             </button>
             <span class="font-mono">{{ ip }}</span>
+            <NetClassBadge :cls="detail?.ip_class" />
           </h1>
           <p class="text-zinc-400 mt-1">Análise do talker — upload (como origem) e download (como destino)</p>
         </div>
@@ -360,14 +388,29 @@ onUnmounted(() => {
                 Os últimos ~60s preenchem retroativamente conforme os flows expiram no roteador
               </p>
             </div>
-            <button
-              @click="toggleFlip"
-              class="p-1.5 rounded-md border border-zinc-800 text-zinc-400 hover:text-emerald-400 transition-colors"
-              title="Inverter lados"
-            >
-              <ArrowUpDown class="w-4 h-4" />
-            </button>
+            <div class="flex items-center gap-3">
+              <div class="flex rounded-md border border-zinc-800 overflow-hidden text-xs">
+                <button
+                  v-for="opt in scopeOptions"
+                  :key="opt.v"
+                  class="px-2.5 py-1.5 transition-colors first:border-l-0 border-l border-zinc-800"
+                  :class="scope === opt.v ? 'bg-emerald-500/10 text-emerald-400' : 'text-zinc-400 hover:text-zinc-200'"
+                  @click="setScope(opt.v)"
+                >{{ opt.label }}</button>
+              </div>
+              <button
+                @click="toggleFlip"
+                class="p-1.5 rounded-md border border-zinc-800 text-zinc-400 hover:text-emerald-400 transition-colors"
+                title="Inverter lados"
+              >
+                <ArrowUpDown class="w-4 h-4" />
+              </button>
+            </div>
           </div>
+          <p v-if="showCgnatHint" class="mb-3 text-xs text-amber-400/80 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
+            Assinante atrás de CGNAT com tráfego para destinos internos: o destino final é decidido
+            no CGNAT/roteador e não aparece neste flow. Use "Internet" para ver só o tráfego externo.
+          </p>
           <div class="h-64">
             <Line :data="chartData" :options="chartOptions" />
           </div>
@@ -401,9 +444,12 @@ onUnmounted(() => {
                     class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors"
                   >
                     <td class="px-4 py-2 font-mono">
-                      <router-link :to="`/talkers/${encodeURIComponent(c.peer)}`" class="text-slate-200 hover:text-emerald-400">
-                        {{ c.peer }}
-                      </router-link>
+                      <span class="inline-flex items-center gap-1.5">
+                        <router-link :to="`/talkers/${encodeURIComponent(c.peer)}`" class="text-slate-200 hover:text-emerald-400">
+                          {{ c.peer }}
+                        </router-link>
+                        <NetClassBadge :cls="c.peer_class" />
+                      </span>
                     </td>
                     <td class="px-4 py-2 font-mono text-zinc-500">{{ c.peer_asn ? `AS${c.peer_asn}` : '—' }}</td>
                     <td class="px-4 py-2 font-mono text-zinc-300">{{ protoPort(c.protocol, c.port) }}</td>

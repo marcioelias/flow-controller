@@ -16,6 +16,7 @@ mod middleware;
 mod ml_api;
 mod ml_model;
 mod ml_runner;
+mod netclass;
 mod settings;
 mod stats;
 mod system_health;
