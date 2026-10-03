@@ -748,7 +748,7 @@ fn main() -> anyhow::Result<()> {
             )
             .route("/api/llm/models", post(llm::list_models_handler))
             .route("/api/llm/test", post(llm::test_llm_handler))
-            .layer(axum_middleware::from_fn(middleware::require_admin));
+            .route_layer(axum_middleware::from_fn(middleware::require_admin));
 
         // Semi-protected routes (require auth but not admin)
         let user_routes = Router::new()
@@ -778,7 +778,7 @@ fn main() -> anyhow::Result<()> {
             .route("/api/ml/status", get(ml_api::get_ml_status))
             .route("/api/ml/stats", get(ml_api::get_ml_stats))
             .route("/api/ml/events", get(ml_api::get_ml_events))
-            .layer(axum_middleware::from_fn(middleware::require_auth));
+            .route_layer(axum_middleware::from_fn(middleware::require_auth));
 
         let app = Router::new()
             .merge(public_routes)
