@@ -911,6 +911,196 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
+// ─── 17.1 Talker detail ───────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct TalkerQuery {
+    pub ip: String,
+    pub minutes: Option<u32>,
+    pub exporter_ip: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TalkerPoint {
+    pub t: u64,
+    pub up_bps: u64,
+    pub down_bps: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TalkerConversation {
+    pub peer: String,
+    pub peer_asn: u64,
+    pub protocol: u64,
+    pub port: u64,
+    pub up_bytes: u64,
+    pub down_bytes: u64,
+    pub packets: u64,
+    pub first_seen: u64,
+    pub last_seen: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TalkerPort {
+    pub protocol: u64,
+    pub port: u64,
+    pub up_bytes: u64,
+    pub down_bytes: u64,
+    pub peers: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TalkerDetail {
+    pub ip: String,
+    pub bucket_secs: u64,
+    pub from: u64,
+    pub to: u64,
+    pub up_bytes: u64,
+    pub down_bytes: u64,
+    pub up_p95_bps: u64,
+    pub down_p95_bps: u64,
+    pub series: Vec<TalkerPoint>,
+    pub conversations: Vec<TalkerConversation>,
+    pub ports: Vec<TalkerPort>,
+}
+
+pub async fn get_talker_handler(
+    State(state): State<Arc<crate::auth::AppState>>,
+    Query(params): Query<TalkerQuery>,
+) -> Result<Json<TalkerDetail>, StatusCode> {
+    license_gate(&state, 1)?;
+    let ip: std::net::IpAddr = params.ip.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let minutes = params.minutes.unwrap_or(5).clamp(1, 1440);
+    let bucket_secs: u64 = if minutes <= 15 { 1 } else { 60 };
+
+    let (table, x) = match ip {
+        std::net::IpAddr::V4(v4) => ("network_flows_v4", format!("toIPv4('{v4}')")),
+        std::net::IpAddr::V6(v6) => ("network_flows_v6", format!("toIPv6('{v6}')")),
+    };
+    let device = match safe_ip(params.exporter_ip.as_deref()) {
+        Some(e) => format!("exporter_ip = '{e}' AND "),
+        None => String::new(),
+    };
+    let filter = format!(
+        "FROM {table} WHERE {device}timestamp >= now() - INTERVAL {minutes} MINUTE \
+         AND (src_ip = {x} OR dst_ip = {x})"
+    );
+    let up = format!("sumIf(bytes, src_ip = {x}) AS up_bytes");
+    let down = format!("sumIf(bytes, dst_ip = {x}) AS down_bytes");
+    // Lower port is taken as the service; the ephemeral side is dropped
+    let port = "least(src_port, dst_port) AS port";
+
+    let series_sql = format!(
+        "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL {bucket_secs} SECOND)) AS t, \
+                {up}, {down} {filter} GROUP BY t ORDER BY t FORMAT JSON"
+    );
+    let conv_sql = format!(
+        "SELECT toString(if(src_ip = {x}, dst_ip, src_ip)) AS peer, \
+                if(src_ip = {x}, dst_asn, src_asn) AS peer_asn, protocol, {port}, {up}, {down}, \
+                sum(packets) AS packets, \
+                toUnixTimestamp(min(timestamp)) AS first_seen, \
+                toUnixTimestamp(max(timestamp)) AS last_seen \
+         {filter} GROUP BY peer, peer_asn, protocol, port \
+         ORDER BY up_bytes + down_bytes DESC LIMIT 50 FORMAT JSON"
+    );
+    let ports_sql = format!(
+        "SELECT protocol, {port}, {up}, {down}, \
+                uniq(if(src_ip = {x}, dst_ip, src_ip)) AS peers \
+         {filter} GROUP BY protocol, port \
+         ORDER BY up_bytes + down_bytes DESC LIMIT 20 FORMAT JSON"
+    );
+
+    let (series_val, conv_val, ports_val) = tokio::try_join!(
+        ch_query(&series_sql),
+        ch_query(&conv_sql),
+        ch_query(&ports_sql)
+    )?;
+    let data = |v: &serde_json::Value| v["data"].as_array().cloned().unwrap_or_default();
+
+    let (mut up_bytes, mut down_bytes) = (0u64, 0u64);
+    let series: Vec<TalkerPoint> = data(&series_val)
+        .iter()
+        .map(|r| {
+            let up = parse_u64_field(&r["up_bytes"]);
+            let down = parse_u64_field(&r["down_bytes"]);
+            up_bytes += up;
+            down_bytes += down;
+            TalkerPoint {
+                t: parse_u64_field(&r["t"]),
+                up_bps: up * 8 / bucket_secs,
+                down_bps: down * 8 / bucket_secs,
+            }
+        })
+        .collect();
+
+    let buckets = (minutes as u64 * 60 / bucket_secs) as u32;
+    let up_rates: Vec<u64> = series.iter().map(|p| p.up_bps).collect();
+    let down_rates: Vec<u64> = series.iter().map(|p| p.down_bps).collect();
+
+    let conversations = data(&conv_val)
+        .iter()
+        .map(|r| TalkerConversation {
+            peer: r["peer"].as_str().unwrap_or_default().to_string(),
+            peer_asn: parse_u64_field(&r["peer_asn"]),
+            protocol: parse_u64_field(&r["protocol"]),
+            port: parse_u64_field(&r["port"]),
+            up_bytes: parse_u64_field(&r["up_bytes"]),
+            down_bytes: parse_u64_field(&r["down_bytes"]),
+            packets: parse_u64_field(&r["packets"]),
+            first_seen: parse_u64_field(&r["first_seen"]),
+            last_seen: parse_u64_field(&r["last_seen"]),
+        })
+        .collect();
+
+    let ports = data(&ports_val)
+        .iter()
+        .map(|r| TalkerPort {
+            protocol: parse_u64_field(&r["protocol"]),
+            port: parse_u64_field(&r["port"]),
+            up_bytes: parse_u64_field(&r["up_bytes"]),
+            down_bytes: parse_u64_field(&r["down_bytes"]),
+            peers: parse_u64_field(&r["peers"]),
+        })
+        .collect();
+
+    let to = unix_now();
+    Ok(Json(TalkerDetail {
+        ip: ip.to_string(),
+        bucket_secs,
+        from: to - minutes as u64 * 60,
+        to,
+        up_bytes,
+        down_bytes,
+        up_p95_bps: p95_zero_filled(up_rates, buckets),
+        down_p95_bps: p95_zero_filled(down_rates, buckets),
+        series,
+        conversations,
+        ports,
+    }))
+}
+
+/// Nearest-rank p95 over `buckets` slots, where `values` are the non-empty ones
+fn p95_zero_filled(mut values: Vec<u64>, buckets: u32) -> u64 {
+    values.sort_unstable_by(|a, b| b.cmp(a));
+    let pos = p95_desc_position(buckets.max(values.len() as u32));
+    values.get(pos as usize - 1).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod talker_tests {
+    use super::p95_zero_filled;
+
+    #[test]
+    fn p95_counts_silent_buckets_as_zero() {
+        // one burst in 60 buckets: rank 57 ascending is a zero
+        assert_eq!(p95_zero_filled(vec![1_000], 60), 0);
+        // traffic in every bucket: 4th largest
+        let full: Vec<u64> = (1..=60).collect();
+        assert_eq!(p95_zero_filled(full, 60), 57);
+        assert_eq!(p95_zero_filled(vec![], 300), 0);
+    }
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Only a syntactically valid IP may be interpolated into SQL

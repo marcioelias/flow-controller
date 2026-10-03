@@ -154,6 +154,21 @@ impl ClickhouseExporter {
             }
         }
 
+        // Per-IP drill-down (task 17.1): the ORDER BY barely helps an IP filter,
+        // so skip indexes keep long windows from scanning every granule.
+        // Existing parts only gain them on merge.
+        for table in ["network_flows_v4", "network_flows_v6"] {
+            for col in ["src_ip", "dst_ip"] {
+                let sql = format!(
+                    "ALTER TABLE {table} ADD INDEX IF NOT EXISTS idx_{col} {col} \
+                     TYPE bloom_filter(0.01) GRANULARITY 1"
+                );
+                if let Err(e) = self.client.query(sql.as_str()).execute().await {
+                    tracing::warn!("{table}.idx_{col} create (non-fatal): {e}");
+                }
+            }
+        }
+
         // Anomaly detector materialized views (hourly tx/rx per IP)
         let mv_tx = format!(
             r#"

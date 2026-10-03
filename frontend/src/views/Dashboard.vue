@@ -448,7 +448,7 @@ onUnmounted(() => {
           <p class="text-[11px] text-zinc-500 mt-0.5">{{ formatCount(overview.current_pps) }} pps</p>
         </div>
 
-        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 cursor-pointer hover:border-zinc-700 transition-colors" @click="router.push('/top-talkers')">
           <div class="flex items-center justify-between mb-2">
             <span class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Talkers</span>
             <Users class="w-3.5 h-3.5 text-blue-400" />
@@ -622,7 +622,13 @@ onUnmounted(() => {
           </div>
           <div v-if="topTalkers.length === 0" class="text-sm text-zinc-500 py-8 text-center">Aguardando dados…</div>
           <div v-else class="space-y-2.5">
-            <div v-for="t in topTalkers" :key="t.src_ip" class="flex items-center gap-3">
+            <div
+              v-for="t in topTalkers"
+              :key="t.src_ip"
+              class="flex items-center gap-3"
+              :class="t.src_ip !== 'outros' ? 'cursor-pointer hover:bg-zinc-800/40 rounded -mx-1 px-1' : ''"
+              @click="t.src_ip !== 'outros' && router.push(`/talkers/${encodeURIComponent(t.src_ip)}`)"
+            >
               <span class="font-mono text-xs text-zinc-300 w-32 truncate" :title="t.src_ip">{{ t.src_ip }}</span>
               <div class="flex-1 h-4 bg-zinc-800/60 rounded overflow-hidden flex">
                 <!-- in/out split within the bar; 2px gap via margin -->

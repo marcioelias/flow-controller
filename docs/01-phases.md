@@ -382,7 +382,7 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 
 | Task | Spec file | Status |
 |------|-----------|--------|
-| 17.1 Análise detalhada de um talker (up/down, conversas, portas) | `tasks/task-17.1-talker-detail.md` | 🔲 |
+| 17.1 Análise detalhada de um talker (up/down, conversas, portas) | `tasks/task-17.1-talker-detail.md` | ✅ |
 
 ---
 

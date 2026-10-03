@@ -45,7 +45,7 @@ const expanded = ref<Record<string, boolean>>({
 
 // Auto-expand the section that contains the current route
 function sectionForPath(p: string): string | null {
-  if (['/top-talkers', '/asn-traffic', '/ports'].some(r => p.startsWith(r))) return 'analise'
+  if (['/top-talkers', '/talkers', '/asn-traffic', '/ports'].some(r => p.startsWith(r))) return 'analise'
   if (p.startsWith('/alerts'))                                                 return 'alertas'
   if (p.startsWith('/ai'))                                                     return 'ia'
   if (p.startsWith('/bgp'))                                                    return 'bgp'
@@ -119,7 +119,7 @@ onUnmounted(() => {
         <div class="pt-2">
           <button @click="toggle('analise')"
             class="nav-section-btn w-full"
-            :class="isActive(['/top-talkers','/asn-traffic','/ports']) ? 'text-emerald-400' : 'text-zinc-500'">
+            :class="isActive(['/top-talkers','/talkers','/asn-traffic','/ports']) ? 'text-emerald-400' : 'text-zinc-500'">
             <span class="flex items-center gap-2">
               <Globe class="w-4 h-4" /> Análise
             </span>
@@ -127,7 +127,7 @@ onUnmounted(() => {
               :class="expanded.analise ? 'rotate-90' : ''" />
           </button>
           <div v-if="expanded.analise" class="mt-0.5 ml-3 space-y-0.5 border-l border-zinc-800 pl-3">
-            <router-link to="/top-talkers" class="nav-link" :class="route.path.startsWith('/top-talkers') ? 'nav-active' : 'nav-idle'">
+            <router-link to="/top-talkers" class="nav-link" :class="route.path.startsWith('/top-talkers') || route.path.startsWith('/talkers') ? 'nav-active' : 'nav-idle'">
               <Users class="w-4 h-4" /> Top Talkers
             </router-link>
             <router-link to="/asn-traffic" class="nav-link" :class="route.path.startsWith('/asn-traffic') ? 'nav-active' : 'nav-idle'">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { Bar } from 'vue-chartjs'
 import {
@@ -11,12 +12,13 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js'
-import { Users, RefreshCw } from 'lucide-vue-next'
+import { Users, RefreshCw, Search } from 'lucide-vue-next'
 import { formatBytes, formatNumber } from '../utils/format'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 const authStore = useAuthStore()
+const router = useRouter()
 
 interface Exporter {
   id: number
@@ -45,6 +47,12 @@ const minuteOptions = [
   { label: 'Últimas 6h', value: 360 },
   { label: 'Últimas 24h', value: 1440 },
 ]
+
+const searchIp = ref('')
+function openTalker(ip: string) {
+  const v = ip.trim()
+  if (v && v !== 'outros') router.push(`/talkers/${encodeURIComponent(v)}`)
+}
 
 const top10 = computed(() => rows.value.slice(0, 10))
 
@@ -157,6 +165,15 @@ onUnmounted(() => {
         </div>
 
         <div class="flex items-center gap-3">
+          <form class="relative" @submit.prevent="openTalker(searchIp)">
+            <Search class="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              v-model="searchIp"
+              placeholder="Analisar IP"
+              class="pl-9 pr-3 py-2 w-44 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+            />
+          </form>
+
           <select
             v-model="selectedDevice"
             @change="loadData"
@@ -223,6 +240,8 @@ onUnmounted(() => {
               v-for="(row, i) in rows"
               :key="row.src_ip"
               class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors"
+              :class="{ 'cursor-pointer': row.src_ip !== 'outros' }"
+              @click="openTalker(row.src_ip)"
             >
               <td class="px-6 py-3 text-zinc-500 font-mono">{{ i + 1 }}</td>
               <td class="px-6 py-3 font-mono" :class="row.src_ip === 'outros' ? 'text-zinc-500 italic' : 'text-slate-200'">

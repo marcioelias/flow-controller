@@ -766,6 +766,7 @@ fn main() -> anyhow::Result<()> {
                 get(stats::get_top_talkers_handler),
             )
             .route("/api/stats/asn", get(stats::get_asn_stats_handler))
+            .route("/api/stats/talker", get(stats::get_talker_handler))
             .route("/api/stats/ports", get(stats::get_port_breakdown_handler))
             .route("/api/stats/timeline", get(stats::get_timeline_handler))
             .route(

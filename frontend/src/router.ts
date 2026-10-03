@@ -84,6 +84,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/talkers/:ip',
+    name: 'TalkerDetail',
+    component: () => import('./views/TalkerDetail.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/asn-traffic',
     name: 'AsnTraffic',
     component: () => import('./views/AsnTraffic.vue'),
