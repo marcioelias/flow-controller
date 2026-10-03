@@ -101,6 +101,12 @@ pub struct NormalizedFlow {
     pub start_ms: u64,
     /// Real flow end in unix ms (0 = exporter did not report it)
     pub end_ms: u64,
+    /// Post-NAT addresses/ports (IE 225–228, 281/282, NSEL 40001–40004) —
+    /// only when the exporter is the NAT device itself (task 17.8)
+    pub nat_src_ip: Option<IpAddrType>,
+    pub nat_dst_ip: Option<IpAddrType>,
+    pub nat_src_port: u16,
+    pub nat_dst_port: u16,
 }
 
 pub const DIRECTION_INGRESS: u8 = 0;

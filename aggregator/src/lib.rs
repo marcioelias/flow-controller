@@ -16,6 +16,11 @@ pub struct AggregationKey {
     /// Router-reported direction (IE 61): flows in opposite directions must
     /// not merge, otherwise in/out split is lost
     pub direction: u8,
+    /// Post-NAT translation (task 17.8): different translations must not merge
+    pub nat_src_ip: Option<IpAddrType>,
+    pub nat_dst_ip: Option<IpAddrType>,
+    pub nat_src_port: u16,
+    pub nat_dst_port: u16,
 }
 
 /// The accumulated metrics for a given AggregationKey
@@ -85,6 +90,10 @@ impl ThreadLocalAggregator {
             src_asn: flow.src_asn,
             dst_asn: flow.dst_asn,
             direction: flow.direction,
+            nat_src_ip: flow.nat_src_ip,
+            nat_dst_ip: flow.nat_dst_ip,
+            nat_src_port: flow.nat_src_port,
+            nat_dst_port: flow.nat_dst_port,
         };
 
         let (s0, s1) = slice_bounds(flow.start_ms, flow.end_ms, now_secs);
@@ -152,6 +161,10 @@ mod tests {
             direction: flow_types::DIRECTION_EGRESS,
             start_ms,
             end_ms,
+            nat_src_ip: None,
+            nat_dst_ip: None,
+            nat_src_port: 0,
+            nat_dst_port: 0,
         }
     }
 

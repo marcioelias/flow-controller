@@ -984,6 +984,8 @@ pub struct TalkerConversation {
     pub peer: String,
     pub peer_asn: u64,
     pub peer_class: &'static str,
+    /// Other side of the talker's NAT translation; empty without NAT (task 17.8)
+    pub translated: String,
     pub protocol: u64,
     pub port: u64,
     pub up_bytes: u64,
@@ -1028,17 +1030,33 @@ pub async fn get_talker_handler(
     let minutes = params.minutes.unwrap_or(5).clamp(1, 1440);
     let bucket_secs: u64 = if minutes <= 15 { 1 } else { 60 };
 
-    let (table, x) = match ip {
-        std::net::IpAddr::V4(v4) => ("network_flows_v4", format!("toIPv4('{v4}')")),
-        std::net::IpAddr::V6(v6) => ("network_flows_v6", format!("toIPv6('{v6}')")),
+    let (table, x, zero) = match ip {
+        std::net::IpAddr::V4(v4) => (
+            "network_flows_v4",
+            format!("toIPv4('{v4}')"),
+            "toIPv4('0.0.0.0')",
+        ),
+        std::net::IpAddr::V6(v6) => (
+            "network_flows_v6",
+            format!("toIPv6('{v6}')"),
+            "toIPv6('::')",
+        ),
     };
+    // NAT-aware matching (task 17.8 R-04): the IP may sit on either side of
+    // the translation when the exporter is the NAT device
+    let is_up = format!("(src_ip = {x} OR nat_src_ip = {x})");
+    let is_down = format!("(dst_ip = {x} OR nat_dst_ip = {x})");
     let device = match safe_ip(params.exporter_ip.as_deref()) {
         Some(e) => format!("exporter_ip = '{e}' AND "),
         None => String::new(),
     };
     let classifier = crate::netclass::NetClassifier::load(&state.db).await;
-    let peer_ip = format!("if(src_ip = {x}, dst_ip, src_ip)");
-    let peer_asn = format!("if(src_ip = {x}, dst_asn, src_asn)");
+    let peer_ip = format!("if({is_up}, if(nat_dst_ip != {zero}, nat_dst_ip, dst_ip), src_ip)");
+    let peer_asn = format!("if({is_up}, dst_asn, src_asn)");
+    let translated = format!(
+        "multiIf(src_ip = {x}, nat_src_ip, nat_src_ip = {x}, src_ip, \
+                 dst_ip = {x}, nat_dst_ip, nat_dst_ip = {x}, dst_ip, {zero})"
+    );
     let peer_internal = classifier.sql_internal(&peer_ip, &peer_asn, ip.is_ipv6());
     let (scope, scope_cond) = match params.scope.as_deref() {
         Some("internet") => ("internet", format!(" AND NOT {peer_internal}")),
@@ -1047,10 +1065,10 @@ pub async fn get_talker_handler(
     };
     let filter = format!(
         "FROM {table} WHERE {device}timestamp >= now() - INTERVAL {minutes} MINUTE \
-         AND (src_ip = {x} OR dst_ip = {x}){scope_cond}"
+         AND ({is_up} OR {is_down}){scope_cond}"
     );
-    let up = format!("sumIf(bytes, src_ip = {x}) AS up_bytes");
-    let down = format!("sumIf(bytes, dst_ip = {x}) AS down_bytes");
+    let up = format!("sumIf(bytes, {is_up}) AS up_bytes");
+    let down = format!("sumIf(bytes, {is_down}) AS down_bytes");
     // Lower port is taken as the service; the ephemeral side is dropped
     let port = "least(src_port, dst_port) AS port";
 
@@ -1062,10 +1080,11 @@ pub async fn get_talker_handler(
     let conv_sql = format!(
         "SELECT toString({peer_ip}) AS peer, \
                 {peer_asn} AS peer_asn, protocol, {port}, {up}, {down}, \
+                if({translated} = {zero}, '', toString({translated})) AS translated, \
                 sum(packets) AS packets, \
                 toUnixTimestamp(min(timestamp)) AS first_seen, \
                 toUnixTimestamp(max(timestamp)) AS last_seen \
-         {filter} GROUP BY peer, peer_asn, protocol, port \
+         {filter} GROUP BY peer, peer_asn, protocol, port, translated \
          ORDER BY up_bytes + down_bytes DESC LIMIT 50 FORMAT JSON"
     );
     let ports_sql = format!(
@@ -1112,6 +1131,7 @@ pub async fn get_talker_handler(
                 r["peer"].as_str().unwrap_or_default(),
                 parse_u64_field(&r["peer_asn"]) as u32,
             ),
+            translated: r["translated"].as_str().unwrap_or_default().to_string(),
             protocol: parse_u64_field(&r["protocol"]),
             port: parse_u64_field(&r["port"]),
             up_bytes: parse_u64_field(&r["up_bytes"]),

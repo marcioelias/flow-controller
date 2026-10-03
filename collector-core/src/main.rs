@@ -122,6 +122,32 @@ pub struct DebugFlow {
     pub flow_count: u64,
     /// 0 = ingress, 1 = egress, 255 = not reported (IE 61)
     pub direction: u8,
+    /// Post-NAT fields when the exporter sends them (task 17.8)
+    pub nat_src_ip: Option<String>,
+    pub nat_dst_ip: Option<String>,
+    pub nat_src_port: u16,
+    pub nat_dst_port: u16,
+}
+
+fn ip_type_to_string(ip: flow_types::IpAddrType) -> String {
+    match ip {
+        flow_types::IpAddrType::V4(a) => a.to_string(),
+        flow_types::IpAddrType::V6(a) => a.to_string(),
+    }
+}
+
+fn nat_v4(ip: Option<flow_types::IpAddrType>) -> u32 {
+    match ip {
+        Some(flow_types::IpAddrType::V4(a)) => u32::from(a),
+        _ => 0,
+    }
+}
+
+fn nat_v6(ip: Option<flow_types::IpAddrType>) -> [u8; 16] {
+    match ip {
+        Some(flow_types::IpAddrType::V6(a)) => a.octets(),
+        _ => [0; 16],
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -957,6 +983,10 @@ fn main() -> anyhow::Result<()> {
                             exporter_ip: u32::from(key.exporter_ip),
                             src_ip: u32::from(src_ip),
                             dst_ip: u32::from(dst_ip),
+                            nat_src_ip: nat_v4(key.nat_src_ip),
+                            nat_dst_ip: nat_v4(key.nat_dst_ip),
+                            nat_src_port: key.nat_src_port,
+                            nat_dst_port: key.nat_dst_port,
                             src_port: key.src_port,
                             dst_port: key.dst_port,
                             protocol: key.protocol,
@@ -974,6 +1004,10 @@ fn main() -> anyhow::Result<()> {
                             exporter_ip: u32::from(key.exporter_ip),
                             src_ip: src_ip.octets(),
                             dst_ip: dst_ip.octets(),
+                            nat_src_ip: nat_v6(key.nat_src_ip),
+                            nat_dst_ip: nat_v6(key.nat_dst_ip),
+                            nat_src_port: key.nat_src_port,
+                            nat_dst_port: key.nat_dst_port,
                             src_port: key.src_port,
                             dst_port: key.dst_port,
                             protocol: key.protocol,
@@ -1216,6 +1250,10 @@ fn worker_loop(
                                 tcp_flags: flow.tcp_flags,
                                 flow_count: 1,
                                 direction: flow.direction,
+                                nat_src_ip: flow.nat_src_ip.map(ip_type_to_string),
+                                nat_dst_ip: flow.nat_dst_ip.map(ip_type_to_string),
+                                nat_src_port: flow.nat_src_port,
+                                nat_dst_port: flow.nat_dst_port,
                             });
                         }
                         if flow.end_ms > 0 {

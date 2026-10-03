@@ -46,6 +46,7 @@ interface Conversation {
   peer: string
   peer_asn: number
   peer_class: NetClass
+  translated: string
   protocol: number
   port: number
   up_bytes: number
@@ -99,6 +100,7 @@ function setScope(v: Scope) {
   loadData()
 }
 // Assinante CGNAT falando com o próprio ASN: o destino final é resolvido no NAT
+const hasTranslation = computed(() => detail.value?.conversations.some((c) => c.translated) ?? false)
 const showCgnatHint = computed(
   () =>
     detail.value?.ip_class === 'cgnat' &&
@@ -430,6 +432,7 @@ onUnmounted(() => {
                   <tr class="border-b border-zinc-800 text-zinc-400 text-left">
                     <SortTh :sort="convSort" k="peer" class="px-4 py-2">Peer</SortTh>
                     <SortTh :sort="convSort" k="peer_asn" class="px-4 py-2">ASN</SortTh>
+                    <SortTh v-if="hasTranslation" :sort="convSort" k="translated" class="px-4 py-2" title="Outro lado da tradução NAT deste IP">Tradução</SortTh>
                     <SortTh :sort="convSort" k="service" class="px-4 py-2">Serviço</SortTh>
                     <SortTh :sort="convSort" k="down_bytes" align="right" class="px-4 py-2">↓ Média</SortTh>
                     <SortTh :sort="convSort" k="up_bytes" align="right" class="px-4 py-2">↑ Média</SortTh>
@@ -452,6 +455,10 @@ onUnmounted(() => {
                       </span>
                     </td>
                     <td class="px-4 py-2 font-mono text-zinc-500">{{ c.peer_asn ? `AS${c.peer_asn}` : '—' }}</td>
+                    <td v-if="hasTranslation" class="px-4 py-2 font-mono text-amber-400/90">
+                      <router-link v-if="c.translated" :to="`/talkers/${encodeURIComponent(c.translated)}`" class="hover:text-amber-300">{{ c.translated }}</router-link>
+                      <span v-else class="text-zinc-700">—</span>
+                    </td>
                     <td class="px-4 py-2 font-mono text-zinc-300">{{ protoPort(c.protocol, c.port) }}</td>
                     <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_IN }">{{ rate(c.down_bytes) }}</td>
                     <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_OUT }">{{ rate(c.up_bytes) }}</td>

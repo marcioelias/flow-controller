@@ -21,6 +21,10 @@ interface DebugFlow {
   egress_if:     number
   tcp_flags:     number
   flow_count:    number
+  nat_src_ip:    string | null
+  nat_dst_ip:    string | null
+  nat_src_port:  number
+  nat_dst_port:  number
 }
 
 const MAX_FLOWS = 500
@@ -286,6 +290,7 @@ function protoColor(p: number): string {
             <span class="text-zinc-300 flex-shrink-0">{{ flow.src_ip }}</span>
             <span class="text-zinc-600">→</span>
             <span class="text-zinc-300 flex-shrink-0">{{ flow.dst_ip }}:{{ flow.dst_port }}</span>
+            <span v-if="flow.nat_src_ip || flow.nat_dst_ip" class="flex-shrink-0 text-[10px] font-semibold text-amber-400">NAT</span>
             <!-- proto -->
             <span :class="['flex-shrink-0 font-semibold', protoColor(flow.protocol)]">
               {{ protoName(flow.protocol) }}
@@ -388,6 +393,20 @@ function protoColor(p: number): string {
               <div class="text-slate-200">{{ selected.egress_if || '—' }}</div>
               <div class="text-zinc-500">Flow Count</div>
               <div class="text-slate-200">{{ selected.flow_count }}</div>
+
+              <!-- Post-NAT (task 17.8) -->
+              <div class="col-span-2 pb-1 mt-3 mb-1 border-b border-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">
+                NAT (pós-tradução)
+              </div>
+              <template v-if="selected.nat_src_ip || selected.nat_dst_ip">
+                <div class="text-zinc-500">Origem traduzida</div>
+                <div class="text-slate-200">{{ selected.nat_src_ip ?? '—' }}<span v-if="selected.nat_src_port">:{{ selected.nat_src_port }}</span></div>
+                <div class="text-zinc-500">Destino traduzido</div>
+                <div class="text-slate-200">{{ selected.nat_dst_ip ?? '—' }}<span v-if="selected.nat_dst_port">:{{ selected.nat_dst_port }}</span></div>
+              </template>
+              <div v-else class="col-span-2 text-zinc-600 text-xs">
+                O exportador não enviou campos de NAT (IE 225–228 / NSEL 40001–40004) neste flow.
+              </div>
             </div>
           </div>
         </div>

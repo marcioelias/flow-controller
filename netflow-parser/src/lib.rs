@@ -76,6 +76,18 @@ pub const IANA_IPV4_DST_ADDR: u16 = 12;
 pub const IANA_EGRESS_IFACE: u16 = 14;
 /// 0 = ingress, 1 = egress (router perspective)
 pub const IANA_FLOW_DIRECTION: u16 = 61;
+// Post-NAT (task 17.8)
+pub const IANA_POST_NAT_SRC_IPV4: u16 = 225;
+pub const IANA_POST_NAT_DST_IPV4: u16 = 226;
+pub const IANA_POST_NAPT_SRC_PORT: u16 = 227;
+pub const IANA_POST_NAPT_DST_PORT: u16 = 228;
+pub const IANA_POST_NAT_SRC_IPV6: u16 = 281;
+pub const IANA_POST_NAT_DST_IPV6: u16 = 282;
+// Cisco NSEL (NetFlow v9 only; IDs above 32767 are valid in v9)
+pub const NSEL_XLATE_SRC_ADDR_IPV4: u16 = 40001;
+pub const NSEL_XLATE_DST_ADDR_IPV4: u16 = 40002;
+pub const NSEL_XLATE_SRC_PORT: u16 = 40003;
+pub const NSEL_XLATE_DST_PORT: u16 = 40004;
 pub const IANA_BGP_SRC_ASN: u16 = 16;
 pub const IANA_BGP_DST_ASN: u16 = 17;
 pub const IANA_IPV6_SRC_ADDR: u16 = 27;
@@ -155,8 +167,13 @@ fn parse_template_set(
                 continue;
             }
 
+            // v9 has no enterprise bit: IDs above 32767 (Cisco NSEL) are real
             fields.push(template_cache::TemplateField {
-                field_type: raw_type & 0x7FFF, // clear enterprise bit just in case
+                field_type: if enterprise_ids {
+                    raw_type & 0x7FFF
+                } else {
+                    raw_type
+                },
                 length,
             });
         }
@@ -401,6 +418,26 @@ fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFl
         direction: flow_types::DIRECTION_UNKNOWN,
         start_ms: 0,
         end_ms: 0,
+        nat_src_ip: None,
+        nat_dst_ip: None,
+        nat_src_port: 0,
+        nat_dst_port: 0,
+    }
+}
+
+fn read_ip(field_data: &[u8]) -> Option<flow_types::IpAddrType> {
+    match field_data.len() {
+        4 => {
+            let mut arr = [0u8; 4];
+            arr.copy_from_slice(field_data);
+            Some(flow_types::IpAddrType::V4(std::net::Ipv4Addr::from(arr)))
+        }
+        16 => {
+            let mut arr = [0u8; 16];
+            arr.copy_from_slice(field_data);
+            Some(flow_types::IpAddrType::V6(std::net::Ipv6Addr::from(arr)))
+        }
+        _ => None,
     }
 }
 
@@ -464,6 +501,18 @@ fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8]) {
             if f_len == 1 && field_data[0] <= 1 {
                 flow.direction = field_data[0];
             }
+        }
+        IANA_POST_NAT_SRC_IPV4 | IANA_POST_NAT_SRC_IPV6 | NSEL_XLATE_SRC_ADDR_IPV4 => {
+            flow.nat_src_ip = read_ip(field_data).or(flow.nat_src_ip);
+        }
+        IANA_POST_NAT_DST_IPV4 | IANA_POST_NAT_DST_IPV6 | NSEL_XLATE_DST_ADDR_IPV4 => {
+            flow.nat_dst_ip = read_ip(field_data).or(flow.nat_dst_ip);
+        }
+        IANA_POST_NAPT_SRC_PORT | NSEL_XLATE_SRC_PORT => {
+            flow.nat_src_port = read_uint(field_data) as u16
+        }
+        IANA_POST_NAPT_DST_PORT | NSEL_XLATE_DST_PORT => {
+            flow.nat_dst_port = read_uint(field_data) as u16
         }
         _ => {}
     }
@@ -1528,5 +1577,119 @@ mod tests {
         assert_eq!(flows.len(), 1);
         assert_eq!(flows[0].start_ms, boot_ms + 40_000);
         assert_eq!(flows[0].end_ms, boot_ms + 55_000);
+    }
+
+    /// Template + one data record with arbitrary (field_id, bytes) pairs
+    fn build_packet_with_fields(version: u16, fields: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let template_id: u16 = 310;
+        let mut tmpl = Vec::new();
+        tmpl.extend_from_slice(&template_id.to_be_bytes());
+        tmpl.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+        let mut record = Vec::new();
+        for (id, data) in fields {
+            tmpl.extend_from_slice(&id.to_be_bytes());
+            tmpl.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            record.extend_from_slice(data);
+        }
+        let tmpl_set_id: u16 = if version == 9 { 0 } else { 2 };
+        let mut sets = Vec::new();
+        sets.extend_from_slice(&tmpl_set_id.to_be_bytes());
+        sets.extend_from_slice(&((4 + tmpl.len()) as u16).to_be_bytes());
+        sets.extend_from_slice(&tmpl);
+        sets.extend_from_slice(&template_id.to_be_bytes());
+        sets.extend_from_slice(&((4 + record.len()) as u16).to_be_bytes());
+        sets.extend_from_slice(&record);
+
+        let mut pkt = Vec::new();
+        if version == 9 {
+            pkt.extend_from_slice(&9u16.to_be_bytes());
+            pkt.extend_from_slice(&2u16.to_be_bytes());
+            pkt.extend_from_slice(&1000u32.to_be_bytes());
+            pkt.extend_from_slice(&1700000000u32.to_be_bytes());
+            pkt.extend_from_slice(&1u32.to_be_bytes());
+            pkt.extend_from_slice(&100u32.to_be_bytes());
+        } else {
+            pkt.extend_from_slice(&10u16.to_be_bytes());
+            pkt.extend_from_slice(&((16 + sets.len()) as u16).to_be_bytes());
+            pkt.extend_from_slice(&1700000000u32.to_be_bytes());
+            pkt.extend_from_slice(&1u32.to_be_bytes());
+            pkt.extend_from_slice(&100u32.to_be_bytes());
+        }
+        pkt.extend_from_slice(&sets);
+        pkt
+    }
+
+    fn base_fields() -> Vec<(u16, Vec<u8>)> {
+        vec![
+            (IANA_IN_BYTES, 1000u64.to_be_bytes().to_vec()),
+            (IANA_IN_PKTS, 10u64.to_be_bytes().to_vec()),
+            (IANA_PROTOCOL, vec![6]),
+            (IANA_IPV4_SRC_ADDR, vec![100, 68, 29, 12]),
+            (IANA_L4_SRC_PORT, 50000u16.to_be_bytes().to_vec()),
+            (IANA_IPV4_DST_ADDR, vec![170, 231, 6, 78]),
+            (IANA_L4_DST_PORT, 22u16.to_be_bytes().to_vec()),
+        ]
+    }
+
+    fn v4(a: u8, b: u8, c: u8, d: u8) -> Option<flow_types::IpAddrType> {
+        Some(flow_types::IpAddrType::V4(std::net::Ipv4Addr::new(
+            a, b, c, d,
+        )))
+    }
+
+    // AC-01 (task 17.8)
+    #[test]
+    fn test_ipfix_post_nat_fields() {
+        let mut fields = base_fields();
+        fields.push((IANA_POST_NAT_SRC_IPV4, vec![170, 231, 6, 78]));
+        fields.push((IANA_POST_NAT_DST_IPV4, vec![100, 68, 40, 7]));
+        fields.push((IANA_POST_NAPT_SRC_PORT, 61000u16.to_be_bytes().to_vec()));
+        fields.push((IANA_POST_NAPT_DST_PORT, 22u16.to_be_bytes().to_vec()));
+        let pkt = build_packet_with_fields(10, &fields);
+
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        let flows = parse_packet(&pkt, &mut cache, exporter).expect("ipfix nat parse");
+        assert_eq!(flows.len(), 1);
+        let f = &flows[0];
+        assert_eq!(f.nat_src_ip, v4(170, 231, 6, 78));
+        assert_eq!(f.nat_dst_ip, v4(100, 68, 40, 7));
+        assert_eq!(f.nat_src_port, 61000);
+        assert_eq!(f.nat_dst_port, 22);
+        assert_eq!(f.dst_port, 22);
+    }
+
+    // AC-02 (task 17.8): v9 keeps IDs above 32767 unmasked
+    #[test]
+    fn test_v9_nsel_xlate_fields() {
+        let mut fields = base_fields();
+        fields.push((NSEL_XLATE_SRC_ADDR_IPV4, vec![170, 231, 6, 78]));
+        fields.push((NSEL_XLATE_DST_ADDR_IPV4, vec![100, 68, 40, 7]));
+        fields.push((NSEL_XLATE_SRC_PORT, 61000u16.to_be_bytes().to_vec()));
+        fields.push((NSEL_XLATE_DST_PORT, 2222u16.to_be_bytes().to_vec()));
+        // 40001 & 0x7FFF = 7233: must not be read as anything else
+        let pkt = build_packet_with_fields(9, &fields);
+
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        let flows = parse_packet(&pkt, &mut cache, exporter).expect("v9 nsel parse");
+        assert_eq!(flows.len(), 1);
+        let f = &flows[0];
+        assert_eq!(f.nat_src_ip, v4(170, 231, 6, 78));
+        assert_eq!(f.nat_dst_ip, v4(100, 68, 40, 7));
+        assert_eq!(f.nat_src_port, 61000);
+        assert_eq!(f.nat_dst_port, 2222);
+        assert_eq!(f.bytes, 1000);
+    }
+
+    // AC-03 (task 17.8)
+    #[test]
+    fn test_flow_without_nat_has_empty_nat_fields() {
+        let pkt = build_packet_with_fields(10, &base_fields());
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        let f = parse_packet(&pkt, &mut cache, exporter).expect("parse")[0];
+        assert_eq!((f.nat_src_ip, f.nat_dst_ip), (None, None));
+        assert_eq!((f.nat_src_port, f.nat_dst_port), (0, 0));
     }
 }

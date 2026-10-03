@@ -389,7 +389,7 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 | 17.5 Explicador IA: configuração em runtime e falhas visíveis | `tasks/task-17.5-llm-explainer-fix.md` | ✅ |
 | 17.6 Escala automática de unidades + barras de rolagem estilizadas | `tasks/task-17.6-units-and-scrollbars.md` | ✅ |
 | 17.7 Classificação de tráfego: interno, CGNAT e internet | `tasks/task-17.7-internal-and-cgnat-classification.md` | ✅ |
-| 17.8 Campos de NAT (post-NAT) do NetFlow v9 / IPFIX | `tasks/task-17.8-nat-fields.md` | 🔲 |
+| 17.8 Campos de NAT (post-NAT) do NetFlow v9 / IPFIX | `tasks/task-17.8-nat-fields.md` | ✅ |
 
 ---
 

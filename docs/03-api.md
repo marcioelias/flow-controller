@@ -148,6 +148,8 @@ aggregated conversations `(peer, protocol, service port)` and top service ports.
 `scope?` (`all|internet|internal`, filters by the peer's class — task 17.7)
 
 Response adds `ip_class` and per-conversation `peer_class` (`cgnat|internal|internet`).
+NAT-aware (task 17.8): the IP also matches post-NAT columns; conversations carry `translated`
+(other side of the talker's NAT, empty without NAT) and `peer` is the post-NAT destination when present.
 
 **Response 200:** see `tasks/task-17.1-talker-detail.md`. **400** on invalid `ip`, **402** when the license is degraded.
 

@@ -20,6 +20,11 @@ pub struct NetworkFlowV4Row {
     pub flow_count: u64,
     /// 0 = ingress, 1 = egress, 255 = not reported (IE 61)
     pub direction: u8,
+    /// Post-NAT (task 17.8); 0.0.0.0 / port 0 when not exported
+    pub nat_src_ip: u32,
+    pub nat_dst_ip: u32,
+    pub nat_src_port: u16,
+    pub nat_dst_port: u16,
 }
 
 /// Aggregated IPv6 flow. `[u8; 16]` maps onto a ClickHouse `IPv6` column.
@@ -39,6 +44,11 @@ pub struct NetworkFlowV6Row {
     pub flow_count: u64,
     /// 0 = ingress, 1 = egress, 255 = not reported (IE 61)
     pub direction: u8,
+    /// Post-NAT (task 17.8); :: / port 0 when not exported
+    pub nat_src_ip: [u8; 16],
+    pub nat_dst_ip: [u8; 16],
+    pub nat_src_port: u16,
+    pub nat_dst_port: u16,
 }
 
 pub struct ClickhouseExporter {
@@ -100,7 +110,11 @@ impl ClickhouseExporter {
                 packets UInt64,
                 bytes UInt64,
                 flow_count UInt64,
-                direction UInt8 DEFAULT 255
+                direction UInt8 DEFAULT 255,
+                nat_src_ip IPv4 DEFAULT toIPv4('0.0.0.0'),
+                nat_dst_ip IPv4 DEFAULT toIPv4('0.0.0.0'),
+                nat_src_port UInt16 DEFAULT 0,
+                nat_dst_port UInt16 DEFAULT 0
             )
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
@@ -126,7 +140,11 @@ impl ClickhouseExporter {
                 packets UInt64,
                 bytes UInt64,
                 flow_count UInt64,
-                direction UInt8 DEFAULT 255
+                direction UInt8 DEFAULT 255,
+                nat_src_ip IPv6 DEFAULT toIPv6('::'),
+                nat_dst_ip IPv6 DEFAULT toIPv6('::'),
+                nat_src_port UInt16 DEFAULT 0,
+                nat_dst_port UInt16 DEFAULT 0
             )
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
@@ -151,6 +169,24 @@ impl ClickhouseExporter {
         for sql in &ttl_alters {
             if let Err(e) = self.client.query(sql.as_str()).execute().await {
                 tracing::warn!("TTL alter warning (non-fatal): {e}");
+            }
+        }
+
+        // Post-NAT columns for installs created before task 17.8
+        let nat_columns = [
+            ("network_flows_v4", "IPv4 DEFAULT toIPv4('0.0.0.0')"),
+            ("network_flows_v6", "IPv6 DEFAULT toIPv6('::')"),
+        ];
+        for (table, ip_type) in nat_columns {
+            let sql = format!(
+                "ALTER TABLE {table} \
+                 ADD COLUMN IF NOT EXISTS nat_src_ip {ip_type}, \
+                 ADD COLUMN IF NOT EXISTS nat_dst_ip {ip_type}, \
+                 ADD COLUMN IF NOT EXISTS nat_src_port UInt16 DEFAULT 0, \
+                 ADD COLUMN IF NOT EXISTS nat_dst_port UInt16 DEFAULT 0"
+            );
+            if let Err(e) = self.client.query(sql.as_str()).execute().await {
+                tracing::warn!("{table} post-NAT columns (non-fatal): {e}");
             }
         }
 
