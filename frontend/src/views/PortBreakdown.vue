@@ -12,7 +12,7 @@ import {
   Legend,
 } from 'chart.js'
 import { Plug, RefreshCw } from 'lucide-vue-next'
-import { formatBytes, formatNumber } from '../utils/format'
+import { formatBps } from '../utils/format'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
@@ -25,10 +25,13 @@ interface Exporter {
 }
 
 interface PortRow {
-  dst_port: number
+  port: number
   service: string
+  p95_bps: number
+  avg_bps: number
   total_bytes: number
   total_packets: number
+  share_pct: number
 }
 
 const exporters = ref<Exporter[]>([])
@@ -44,18 +47,17 @@ const minuteOptions = [
   { label: 'Última 1h', value: 60 },
 ]
 
-const totalBytes = computed(() => rows.value.reduce((s, r) => s + r.total_bytes, 0))
 const top15 = computed(() => rows.value.slice(0, 15))
 
 const barChartData = computed(() => ({
-  labels: top15.value.map((r) => `${r.dst_port} (${r.service})`),
+  labels: top15.value.map((r) => `${r.port} (${r.service})`),
   datasets: [
     {
-      label: 'Tráfego (bytes)',
+      label: 'p95',
       backgroundColor: top15.value.map((r) =>
         r.service !== 'Other' ? '#10b981' : '#6b7280',
       ),
-      data: top15.value.map((r) => r.total_bytes),
+      data: top15.value.map((r) => r.p95_bps),
       borderRadius: 4,
     },
   ],
@@ -70,7 +72,7 @@ const barChartOptions = {
     legend: { display: false },
     tooltip: {
       callbacks: {
-        label: (ctx: any) => ' ' + formatBytes(ctx.parsed.x),
+        label: (ctx: any) => ' p95 ' + formatBps(ctx.parsed.x),
       },
     },
   },
@@ -78,7 +80,7 @@ const barChartOptions = {
     x: {
       ticks: {
         color: '#9ca3af',
-        callback: (v: any) => formatBytes(Number(v)),
+        callback: (v: any) => formatBps(Number(v)),
       },
       grid: { color: '#374151' },
     },
@@ -154,7 +156,7 @@ onUnmounted(() => {
             <Plug class="w-6 h-6 text-emerald-500" />
             Aplicações / Portas
           </h1>
-          <p class="text-zinc-400 mt-1">Tráfego por porta de destino</p>
+          <p class="text-zinc-400 mt-1">Taxa por porta de serviço — os dois sentidos da conversa somados</p>
         </div>
 
         <div class="flex items-center gap-3">
@@ -195,7 +197,7 @@ onUnmounted(() => {
         class="bg-zinc-900 border border-zinc-800 rounded-xl p-6"
       >
         <div class="flex items-center gap-4 mb-4">
-          <h2 class="text-base font-semibold text-zinc-300">Top 15 portas</h2>
+          <h2 class="text-base font-semibold text-zinc-300">Top 15 portas (p95)</h2>
           <div class="flex items-center gap-3 text-xs text-zinc-500">
             <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm bg-emerald-500 inline-block"></span>Serviço conhecido</span>
             <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm bg-zinc-500 inline-block"></span>Outro</span>
@@ -220,29 +222,27 @@ onUnmounted(() => {
             <tr class="border-b border-zinc-800 text-zinc-400 text-left">
               <th class="px-6 py-3 font-medium">Porta</th>
               <th class="px-6 py-3 font-medium">Serviço</th>
-              <th class="px-6 py-3 font-medium text-right">Tráfego</th>
-              <th class="px-6 py-3 font-medium text-right">Pacotes</th>
-              <th class="px-6 py-3 font-medium text-right">% Total</th>
+              <th class="px-6 py-3 font-medium text-right">95º perc.</th>
+              <th class="px-6 py-3 font-medium text-right">Média</th>
+              <th class="px-6 py-3 font-medium text-right">% do total</th>
             </tr>
           </thead>
           <tbody>
             <tr
               v-for="row in rows"
-              :key="row.dst_port"
+              :key="row.port"
               class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors"
             >
-              <td class="px-6 py-3 font-mono text-zinc-400">{{ row.dst_port }}</td>
+              <td class="px-6 py-3 font-mono text-zinc-400">{{ row.port }}</td>
               <td class="px-6 py-3">
                 <span
                   :class="row.service !== 'Other' ? 'text-emerald-400' : 'text-zinc-400'"
                   class="font-medium"
                 >{{ row.service }}</span>
               </td>
-              <td class="px-6 py-3 text-right text-slate-200">{{ formatBytes(row.total_bytes) }}</td>
-              <td class="px-6 py-3 text-right text-zinc-300">{{ formatNumber(row.total_packets) }}</td>
-              <td class="px-6 py-3 text-right text-zinc-400">
-                {{ totalBytes > 0 ? ((row.total_bytes / totalBytes) * 100).toFixed(1) + '%' : '—' }}
-              </td>
+              <td class="px-6 py-3 text-right text-emerald-400 font-medium tabular-nums">{{ formatBps(row.p95_bps) }}</td>
+              <td class="px-6 py-3 text-right text-slate-200 tabular-nums">{{ formatBps(row.avg_bps) }}</td>
+              <td class="px-6 py-3 text-right text-zinc-400 tabular-nums">{{ row.share_pct.toFixed(1) }}%</td>
             </tr>
           </tbody>
         </table>

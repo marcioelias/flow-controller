@@ -363,7 +363,7 @@ onUnmounted(() => {
           <p class="text-2xl font-bold text-slate-100">{{ toMbps(average).toFixed(1) }} <span class="text-base font-normal text-zinc-400">Mbps</span></p>
         </div>
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-          <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1">Total</p>
+          <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1">Volume total</p>
           <p class="text-2xl font-bold text-slate-100">{{ formatBytes(total) }}</p>
         </div>
       </div>

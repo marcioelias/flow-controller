@@ -6,6 +6,11 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
 }
 
+/** Average rate (bps) of `bytes` spread over `seconds` */
+export function bytesToBps(bytes: number, seconds: number): number {
+  return seconds > 0 ? (bytes * 8) / seconds : 0
+}
+
 export function formatNumber(n: number): string {
   return n.toLocaleString('pt-BR')
 }

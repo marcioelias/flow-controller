@@ -13,7 +13,7 @@ import {
   Legend,
 } from 'chart.js'
 import { Users, RefreshCw, Search } from 'lucide-vue-next'
-import { formatBytes, formatNumber } from '../utils/format'
+import { formatBps, formatNumber } from '../utils/format'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
@@ -31,6 +31,8 @@ interface TopTalker {
   total_bytes: number
   total_packets: number
   flow_count: number
+  p95_bps: number
+  avg_bps: number
 }
 
 const exporters = ref<Exporter[]>([])
@@ -60,9 +62,9 @@ const barChartData = computed(() => ({
   labels: top10.value.map((r) => r.src_ip),
   datasets: [
     {
-      label: 'Tráfego (bytes)',
+      label: 'p95',
       backgroundColor: '#10b981',
-      data: top10.value.map((r) => r.total_bytes),
+      data: top10.value.map((r) => r.p95_bps),
       borderRadius: 4,
     },
   ],
@@ -77,7 +79,7 @@ const barChartOptions = {
     legend: { display: false },
     tooltip: {
       callbacks: {
-        label: (ctx: any) => ' ' + formatBytes(ctx.parsed.x),
+        label: (ctx: any) => ' p95 ' + formatBps(ctx.parsed.x),
       },
     },
   },
@@ -85,7 +87,7 @@ const barChartOptions = {
     x: {
       ticks: {
         color: '#9ca3af',
-        callback: (v: any) => formatBytes(Number(v)),
+        callback: (v: any) => formatBps(Number(v)),
       },
       grid: { color: '#374151' },
     },
@@ -210,7 +212,7 @@ onUnmounted(() => {
         v-if="top10.length > 0"
         class="bg-zinc-900 border border-zinc-800 rounded-xl p-6"
       >
-        <h2 class="text-base font-semibold text-zinc-300 mb-4">Top 10 por volume</h2>
+        <h2 class="text-base font-semibold text-zinc-300 mb-4">Top 10 por p95</h2>
         <div :style="{ height: Math.max(200, top10.length * 36) + 'px' }">
           <Bar :data="barChartData" :options="barChartOptions" />
         </div>
@@ -230,7 +232,8 @@ onUnmounted(() => {
             <tr class="border-b border-zinc-800 text-zinc-400 text-left">
               <th class="px-6 py-3 font-medium w-12">#</th>
               <th class="px-6 py-3 font-medium">IP Origem</th>
-              <th class="px-6 py-3 font-medium text-right">Tráfego</th>
+              <th class="px-6 py-3 font-medium text-right">95º perc.</th>
+              <th class="px-6 py-3 font-medium text-right">Média</th>
               <th class="px-6 py-3 font-medium text-right">Pacotes</th>
               <th class="px-6 py-3 font-medium text-right">Flows</th>
             </tr>
@@ -247,7 +250,8 @@ onUnmounted(() => {
               <td class="px-6 py-3 font-mono" :class="row.src_ip === 'outros' ? 'text-zinc-500 italic' : 'text-slate-200'">
                 {{ row.src_ip === 'outros' ? 'Outros — além do limite da licença' : row.src_ip }}
               </td>
-              <td class="px-6 py-3 text-right text-emerald-400 font-medium">{{ formatBytes(row.total_bytes) }}</td>
+              <td class="px-6 py-3 text-right text-emerald-400 font-medium tabular-nums">{{ row.src_ip === 'outros' ? '—' : formatBps(row.p95_bps) }}</td>
+              <td class="px-6 py-3 text-right text-slate-200 tabular-nums">{{ formatBps(row.avg_bps) }}</td>
               <td class="px-6 py-3 text-right text-zinc-300">{{ formatNumber(row.total_packets) }}</td>
               <td class="px-6 py-3 text-right text-zinc-400">{{ formatNumber(row.flow_count) }}</td>
             </tr>

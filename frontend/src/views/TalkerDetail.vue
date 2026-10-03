@@ -14,7 +14,7 @@ import {
   Filler,
 } from 'chart.js'
 import { ArrowLeft, ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, Search } from 'lucide-vue-next'
-import { formatBps, formatBytes, formatNumber } from '../utils/format'
+import { bytesToBps, formatBps, formatBytes, formatNumber } from '../utils/format'
 import {
   COLOR_IN,
   COLOR_OUT,
@@ -92,6 +92,11 @@ const PROTOCOLS: Record<number, string> = { 1: 'ICMP', 6: 'TCP', 17: 'UDP', 47: 
 function protoPort(protocol: number, port: number): string {
   const name = PROTOCOLS[protocol] ?? `IP/${protocol}`
   return protocol === 6 || protocol === 17 ? `${name}/${port}` : name
+}
+
+const windowSecs = computed(() => (detail.value ? detail.value.to - detail.value.from : 0))
+function rate(bytes: number): string {
+  return formatBps(bytesToBps(bytes, windowSecs.value))
 }
 
 function clock(sec: number): string {
@@ -368,8 +373,8 @@ onUnmounted(() => {
                     <th class="px-4 py-2 font-medium">Peer</th>
                     <th class="px-4 py-2 font-medium">ASN</th>
                     <th class="px-4 py-2 font-medium">Serviço</th>
-                    <th class="px-4 py-2 font-medium text-right">↓ Down</th>
-                    <th class="px-4 py-2 font-medium text-right">↑ Up</th>
+                    <th class="px-4 py-2 font-medium text-right">↓ Média</th>
+                    <th class="px-4 py-2 font-medium text-right">↑ Média</th>
                     <th class="px-4 py-2 font-medium text-right">Pacotes</th>
                     <th class="px-4 py-2 font-medium text-right">Último</th>
                   </tr>
@@ -387,8 +392,8 @@ onUnmounted(() => {
                     </td>
                     <td class="px-4 py-2 font-mono text-zinc-500">{{ c.peer_asn ? `AS${c.peer_asn}` : '—' }}</td>
                     <td class="px-4 py-2 font-mono text-zinc-300">{{ protoPort(c.protocol, c.port) }}</td>
-                    <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_IN }">{{ formatBytes(c.down_bytes) }}</td>
-                    <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_OUT }">{{ formatBytes(c.up_bytes) }}</td>
+                    <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_IN }">{{ rate(c.down_bytes) }}</td>
+                    <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_OUT }">{{ rate(c.up_bytes) }}</td>
                     <td class="px-4 py-2 text-right tabular-nums text-zinc-300">{{ formatNumber(c.packets) }}</td>
                     <td class="px-4 py-2 text-right tabular-nums text-zinc-500">{{ clock(c.last_seen) }}</td>
                   </tr>
@@ -416,8 +421,8 @@ onUnmounted(() => {
                   class="border-b border-zinc-800/50"
                 >
                   <td class="px-4 py-2 font-mono text-zinc-300">{{ protoPort(p.protocol, p.port) }}</td>
-                  <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_IN }">{{ formatBytes(p.down_bytes) }}</td>
-                  <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_OUT }">{{ formatBytes(p.up_bytes) }}</td>
+                  <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_IN }">{{ rate(p.down_bytes) }}</td>
+                  <td class="px-4 py-2 text-right tabular-nums" :style="{ color: COLOR_OUT }">{{ rate(p.up_bytes) }}</td>
                   <td class="px-4 py-2 text-right tabular-nums text-zinc-400">{{ formatNumber(p.peers) }}</td>
                 </tr>
               </tbody>

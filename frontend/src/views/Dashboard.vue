@@ -12,7 +12,7 @@ import {
   LayoutDashboard, Activity, Wifi, BarChart2, ArrowDown, ArrowUp,
   Gauge, Zap, Users, Bell, Radio, Flame, Globe2, Database,
 } from 'lucide-vue-next'
-import { formatBps, formatBytes } from '../utils/format'
+import { bytesToBps, formatBps, formatBytes } from '../utils/format'
 import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from '../composables/useLiveTraffic'
 import { ArrowUpDown } from 'lucide-vue-next'
 import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, loadMirrorFlip, saveMirrorFlip, type FamFilter } from '../lib/chartTheme'
@@ -42,7 +42,7 @@ interface Overview {
   telemetry_lag_secs: number
   alerts_by_hour: number[]
 }
-interface TopTalker { src_ip: string; total_bytes: number; in_bytes: number; out_bytes: number }
+interface TopTalker { src_ip: string; total_bytes: number; in_bytes: number; out_bytes: number; avg_bps: number }
 interface AlertEvent { id: number; src_ip: string; alert_type: string; severity: string; message: string; created_at: string }
 interface TimelinePoint { minute: number; total_bytes: number }
 
@@ -635,12 +635,12 @@ onUnmounted(() => {
                 <div
                   class="h-full rounded-l"
                   :style="{ width: (t.in_bytes / maxTalkerBytes * 100) + '%', backgroundColor: COLOR_IN }"
-                  :title="'Entrada: ' + formatBytes(t.in_bytes)"
+                  :title="'Entrada: ' + formatBps(bytesToBps(t.in_bytes, 300))"
                 ></div>
                 <div
                   class="h-full"
                   :style="{ width: (t.out_bytes / maxTalkerBytes * 100) + '%', backgroundColor: COLOR_OUT, marginLeft: t.in_bytes > 0 && t.out_bytes > 0 ? '2px' : '0' }"
-                  :title="'Saída: ' + formatBytes(t.out_bytes)"
+                  :title="'Saída: ' + formatBps(bytesToBps(t.out_bytes, 300))"
                 ></div>
                 <div
                   class="h-full bg-zinc-600"
@@ -648,7 +648,7 @@ onUnmounted(() => {
                   title="Sem direção"
                 ></div>
               </div>
-              <span class="text-xs text-zinc-400 tabular-nums w-20 text-right">{{ formatBytes(t.total_bytes) }}</span>
+              <span class="text-xs text-zinc-400 tabular-nums w-20 text-right" title="média 5 min">{{ formatBps(t.avg_bps) }}</span>
             </div>
             <div class="flex items-center gap-4 pt-2 text-[11px] text-zinc-500">
               <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" :style="{ backgroundColor: COLOR_IN }"></span> Entrada</span>
@@ -737,7 +737,7 @@ onUnmounted(() => {
           <h2 class="text-base font-semibold text-slate-200 flex items-center gap-2">
             <Flame class="w-4 h-4 text-emerald-500" /> Ritmo semanal
           </h2>
-          <p class="text-xs text-zinc-500 mt-0.5">Volume por hora × dia — últimos 7 dias</p>
+          <p class="text-xs text-zinc-500 mt-0.5">Taxa média por hora × dia — últimos 7 dias</p>
         </div>
         <div class="overflow-x-auto">
           <div class="min-w-[640px]">
@@ -748,7 +748,7 @@ onUnmounted(() => {
                 :key="hour"
                 class="h-5 flex-1 rounded-[3px]"
                 :style="{ backgroundColor: heatColor(v) }"
-                :title="`${dayNames[day]} ${String(hour).padStart(2, '0')}h — ${formatBytes(v)}`"
+                :title="`${dayNames[day]} ${String(hour).padStart(2, '0')}h — ${formatBps(bytesToBps(v, 3600))}`"
               ></div>
             </div>
             <div class="flex items-center gap-[3px] mt-1">
@@ -779,7 +779,7 @@ onUnmounted(() => {
               <th class="px-6 py-3 font-medium">IP</th>
               <th class="px-6 py-3 font-medium text-right">Entrada</th>
               <th class="px-6 py-3 font-medium text-right">Saída</th>
-              <th class="px-6 py-3 font-medium text-right">Volume</th>
+              <th class="px-6 py-3 font-medium text-right">Total</th>
               <th class="px-6 py-3 font-medium text-right">Flows</th>
               <th class="px-6 py-3 font-medium text-right">Origens únicas</th>
             </tr>
@@ -794,12 +794,12 @@ onUnmounted(() => {
               <td class="px-6 py-3 font-medium text-slate-200">{{ exporterName(stat.exporter_ip) }}</td>
               <td class="px-6 py-3 font-mono text-xs text-zinc-400">{{ stat.exporter_ip }}</td>
               <td class="px-6 py-3 text-right tabular-nums" :style="{ color: COLOR_IN }">
-                {{ stat.in_bytes > 0 ? formatBytes(stat.in_bytes) : '—' }}
+                {{ stat.in_bytes > 0 ? formatBps(bytesToBps(stat.in_bytes, 300)) : '—' }}
               </td>
               <td class="px-6 py-3 text-right tabular-nums" :style="{ color: COLOR_OUT }">
-                {{ stat.out_bytes > 0 ? formatBytes(stat.out_bytes) : '—' }}
+                {{ stat.out_bytes > 0 ? formatBps(bytesToBps(stat.out_bytes, 300)) : '—' }}
               </td>
-              <td class="px-6 py-3 text-right text-emerald-400 font-medium">{{ formatBytes(stat.total_bytes) }}</td>
+              <td class="px-6 py-3 text-right text-emerald-400 font-medium tabular-nums">{{ formatBps(bytesToBps(stat.total_bytes, 300)) }}</td>
               <td class="px-6 py-3 text-right text-zinc-300">{{ stat.flow_count.toLocaleString('pt-BR') }}</td>
               <td class="px-6 py-3 text-right text-zinc-400">{{ stat.unique_sources.toLocaleString('pt-BR') }}</td>
             </tr>

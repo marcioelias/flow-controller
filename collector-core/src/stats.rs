@@ -135,35 +135,52 @@ pub struct TopTalkerRow {
     pub in_bytes: u64,
     pub out_bytes: u64,
     pub unknown_bytes: u64,
+    pub p95_bps: u64,
+    pub avg_bps: u64,
 }
 
 pub async fn get_top_talkers_handler(
     State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<TopTalkersQuery>,
 ) -> Result<Json<Vec<TopTalkerRow>>, StatusCode> {
-    let minutes = params.minutes.unwrap_or(5).min(1440);
+    let minutes = params.minutes.unwrap_or(5).clamp(1, 1440);
     let requested = params.limit.unwrap_or(20).min(100);
     let (limit, capped) = license_gate(&state, requested)?;
-    let wc = where_clause(params.exporter_ip.as_deref(), minutes, "MINUTE");
+    let wc = complete_minutes_where(params.exporter_ip.as_deref(), minutes);
+    let p95 = p95_bps_expr("b", minutes);
 
-    let cols = "sum(bytes) AS total_bytes, sum(packets) AS total_packets, \
-                sum(flow_count) AS flow_count, \
-                sumIf(bytes, direction = 0) AS in_bytes, \
-                sumIf(bytes, direction = 1) AS out_bytes, \
-                sumIf(bytes, direction = 255) AS unknown_bytes";
+    // Per-minute sums first so the p95 sees whole buckets; an IP lives in one
+    // family only, so each table can rank on its own
+    let leg = |table: &str| {
+        format!(
+            "SELECT toString(src_ip) AS src_ip, sum(b) AS total_bytes, sum(p) AS total_packets, \
+                    sum(f) AS flow_count, sum(ib) AS in_bytes, sum(ob) AS out_bytes, \
+                    sum(ub) AS unknown_bytes, {p95} AS p95_bps FROM (\
+               SELECT src_ip, toStartOfMinute(timestamp) AS minute, sum(bytes) AS b, \
+                      sum(packets) AS p, sum(flow_count) AS f, \
+                      sumIf(bytes, direction = 0) AS ib, sumIf(bytes, direction = 1) AS ob, \
+                      sumIf(bytes, direction = 255) AS ub \
+               FROM {table} {wc} GROUP BY src_ip, minute\
+             ) GROUP BY src_ip ORDER BY p95_bps DESC, total_bytes DESC LIMIT {limit}"
+        )
+    };
     // IPv4 e IPv6 nativos não têm supertipo no UNION ALL: as duas pernas viram String
     let sql = format!(
-        "SELECT toString(src_ip) AS src_ip, {cols} \
-         FROM network_flows_v4 {wc} GROUP BY src_ip ORDER BY total_bytes DESC LIMIT {limit} \
-         UNION ALL \
-         SELECT toString(src_ip) AS src_ip, {cols} \
-         FROM network_flows_v6 {wc} GROUP BY src_ip ORDER BY total_bytes DESC LIMIT {limit} \
-         FORMAT JSON"
+        "{} UNION ALL {} FORMAT JSON",
+        leg("network_flows_v4"),
+        leg("network_flows_v6")
     );
 
     let val = ch_query(&sql).await?;
     let mut rows: Vec<TopTalkerRow> = parse_rows::<TopTalkerRowRaw>(&val);
-    rows.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+    for r in &mut rows {
+        r.avg_bps = avg_bps(r.total_bytes, minutes);
+    }
+    rows.sort_by(|a, b| {
+        b.p95_bps
+            .cmp(&a.p95_bps)
+            .then(b.total_bytes.cmp(&a.total_bytes))
+    });
     rows.truncate(limit as usize);
 
     // Fora da licença: agrega o restante como "Outros" — o dado existe,
@@ -190,6 +207,8 @@ pub async fn get_top_talkers_handler(
                     in_bytes: 0,
                     out_bytes: 0,
                     unknown_bytes: 0,
+                    p95_bps: 0,
+                    avg_bps: avg_bps(grand - shown, minutes),
                 });
             }
         }
@@ -206,6 +225,7 @@ struct TopTalkerRowRaw {
     in_bytes: StringOrU64,
     out_bytes: StringOrU64,
     unknown_bytes: StringOrU64,
+    p95_bps: StringOrU64,
 }
 
 impl From<TopTalkerRowRaw> for TopTalkerRow {
@@ -218,6 +238,8 @@ impl From<TopTalkerRowRaw> for TopTalkerRow {
             in_bytes: r.in_bytes.into(),
             out_bytes: r.out_bytes.into(),
             unknown_bytes: r.unknown_bytes.into(),
+            p95_bps: r.p95_bps.into(),
+            avg_bps: 0,
         }
     }
 }
@@ -271,7 +293,7 @@ pub async fn get_asn_stats_handler(
                     format!("AS{asn}")
                 },
                 p95_bps: parse_u64_field(&row["p95_bps"]),
-                avg_bps: total_bytes * 8 / (minutes as u64 * 60),
+                avg_bps: avg_bps(total_bytes, minutes),
                 total_bytes,
                 total_packets: parse_u64_field(&row["total_packets"]),
             }
@@ -290,20 +312,11 @@ fn p95_desc_position(buckets: u32) -> u32 {
 }
 
 fn build_asn_query(exporter_ip: Option<&str>, minutes: u32, limit: u32, direction: &str) -> String {
-    let filter = match safe_ip(exporter_ip) {
-        Some(ip) => format!("WHERE exporter_ip = '{ip}' AND "),
-        None => "WHERE ".to_string(),
-    };
-    // Complete minutes only: the open one would understate its bucket
-    let window = format!(
-        "timestamp >= toStartOfMinute(now()) - INTERVAL {minutes} MINUTE \
-         AND timestamp < toStartOfMinute(now())"
-    );
-
+    let filter = complete_minutes_where(exporter_ip, minutes);
     let side = |table: &str, col: &str| {
         format!(
             "SELECT {col} AS asn, toStartOfMinute(timestamp) AS minute, bytes, packets \
-             FROM {table} {filter}{window} AND {col} != 0"
+             FROM {table} {filter} AND {col} != 0"
         )
     };
     let cols: &[&str] = match direction {
@@ -317,10 +330,9 @@ fn build_asn_query(exporter_ip: Option<&str>, minutes: u32, limit: u32, directio
         .collect::<Vec<_>>()
         .join(" UNION ALL ");
 
-    let pos = p95_desc_position(minutes);
+    let p95 = p95_bps_expr("b", minutes);
     format!(
-        "SELECT asn, sum(b) AS total_bytes, sum(p) AS total_packets, \
-                intDiv(arrayElement(arrayReverseSort(groupArray(b)), {pos}) * 8, 60) AS p95_bps \
+        "SELECT asn, sum(b) AS total_bytes, sum(p) AS total_packets, {p95} AS p95_bps \
          FROM (\
            SELECT asn, minute, sum(bytes) AS b, sum(packets) AS p \
            FROM ({sources}) GROUP BY asn, minute\
@@ -354,14 +366,21 @@ pub struct PortBreakdownQuery {
 
 #[derive(Debug, Serialize)]
 pub struct PortRow {
-    pub dst_port: u16,
+    /// Service port: lower of src/dst port, so both directions of a
+    /// conversation land on the same row (task 17.2 R-04)
+    pub port: u16,
     pub service: String,
+    pub p95_bps: u64,
+    pub avg_bps: u64,
     pub total_bytes: u64,
     pub total_packets: u64,
+    /// Share of the window's total volume, not of the rows shown
+    pub share_pct: f64,
 }
 
 fn port_to_service(port: u16) -> &'static str {
     match port {
+        0 => "Sem porta",
         20 | 21 => "FTP",
         22 => "SSH",
         23 => "Telnet",
@@ -401,44 +420,58 @@ pub async fn get_port_breakdown_handler(
     State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<PortBreakdownQuery>,
 ) -> Result<Json<Vec<PortRow>>, StatusCode> {
-    let minutes = params.minutes.unwrap_or(5).min(1440);
+    let minutes = params.minutes.unwrap_or(5).clamp(1, 1440);
     let requested = params.limit.unwrap_or(20).min(100);
     let (limit, _) = license_gate(&state, requested)?;
-    let wc = where_clause(params.exporter_ip.as_deref(), minutes, "MINUTE");
+    let wc = complete_minutes_where(params.exporter_ip.as_deref(), minutes);
+    let p95 = p95_bps_expr("b", minutes);
 
+    let side = |table: &str| {
+        format!(
+            "SELECT least(src_port, dst_port) AS port, toStartOfMinute(timestamp) AS minute, \
+                    bytes, packets FROM {table} {wc}"
+        )
+    };
     let sql = format!(
-        "SELECT dst_port, sum(bytes) AS total_bytes, sum(packets) AS total_packets \
-         FROM network_flows_v4 {wc} GROUP BY dst_port ORDER BY total_bytes DESC LIMIT {limit} \
-         UNION ALL \
-         SELECT dst_port, sum(bytes) AS total_bytes, sum(packets) AS total_packets \
-         FROM network_flows_v6 {wc} GROUP BY dst_port ORDER BY total_bytes DESC LIMIT {limit} \
-         FORMAT JSON"
+        "SELECT port, sum(b) AS total_bytes, sum(p) AS total_packets, {p95} AS p95_bps FROM (\
+           SELECT port, minute, sum(bytes) AS b, sum(packets) AS p \
+           FROM ({} UNION ALL {}) GROUP BY port, minute\
+         ) GROUP BY port ORDER BY p95_bps DESC, total_bytes DESC LIMIT {limit} FORMAT JSON",
+        side("network_flows_v4"),
+        side("network_flows_v6"),
+    );
+    let total_sql = format!(
+        "SELECT (SELECT sum(bytes) FROM network_flows_v4 {wc}) \
+              + (SELECT sum(bytes) FROM network_flows_v6 {wc}) AS total FORMAT JSON"
     );
 
-    let val = ch_query(&sql).await?;
-    let mut merged: HashMap<u16, (u64, u64)> = HashMap::new();
+    let (val, total_val) = tokio::try_join!(ch_query(&sql), ch_query(&total_sql))?;
+    let window_bytes = parse_u64_field(&total_val["data"][0]["total"]);
 
-    for row in val["data"].as_array().cloned().unwrap_or_default() {
-        let port = parse_u64_field(&row["dst_port"]) as u16;
-        let bytes = parse_u64_field(&row["total_bytes"]);
-        let pkts = parse_u64_field(&row["total_packets"]);
-        let e = merged.entry(port).or_insert((0, 0));
-        e.0 += bytes;
-        e.1 += pkts;
-    }
-
-    let mut rows: Vec<PortRow> = merged
+    let rows = val["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
         .into_iter()
-        .map(|(port, (bytes, pkts))| PortRow {
-            dst_port: port,
-            service: port_to_service(port).to_string(),
-            total_bytes: bytes,
-            total_packets: pkts,
+        .map(|row| {
+            let port = parse_u64_field(&row["port"]) as u16;
+            let total_bytes = parse_u64_field(&row["total_bytes"]);
+            PortRow {
+                port,
+                service: port_to_service(port).to_string(),
+                p95_bps: parse_u64_field(&row["p95_bps"]),
+                avg_bps: avg_bps(total_bytes, minutes),
+                total_bytes,
+                total_packets: parse_u64_field(&row["total_packets"]),
+                share_pct: if window_bytes > 0 {
+                    total_bytes as f64 / window_bytes as f64 * 100.0
+                } else {
+                    0.0
+                },
+            }
         })
         .collect();
 
-    rows.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
-    rows.truncate(limit as usize);
     Ok(Json(rows))
 }
 
@@ -1106,6 +1139,30 @@ mod talker_tests {
 /// Only a syntactically valid IP may be interpolated into SQL
 fn safe_ip(ip: Option<&str>) -> Option<&str> {
     ip.filter(|s| s.parse::<std::net::IpAddr>().is_ok())
+}
+
+/// Last `minutes` complete minutes (task 17.2 R-03): the open minute would
+/// drag rates down
+fn complete_minutes_where(exporter_ip: Option<&str>, minutes: u32) -> String {
+    let device = match safe_ip(exporter_ip) {
+        Some(ip) => format!("exporter_ip = '{ip}' AND "),
+        None => String::new(),
+    };
+    format!(
+        "WHERE {device}timestamp >= toStartOfMinute(now()) - INTERVAL {minutes} MINUTE \
+         AND timestamp < toStartOfMinute(now())"
+    )
+}
+
+/// Nearest-rank p95 (bps) over `minutes` zero-filled buckets, given a column
+/// holding per-minute byte sums inside the aggregation
+fn p95_bps_expr(col: &str, minutes: u32) -> String {
+    let pos = p95_desc_position(minutes);
+    format!("intDiv(arrayElement(arrayReverseSort(groupArray({col})), {pos}) * 8, 60)")
+}
+
+fn avg_bps(bytes: u64, minutes: u32) -> u64 {
+    bytes * 8 / (minutes as u64 * 60)
 }
 
 fn where_clause(exporter_ip: Option<&str>, window: u32, unit: &str) -> String {
