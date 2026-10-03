@@ -7,6 +7,7 @@ import { Brain, RefreshCw, AlertTriangle, CheckCircle2, X, ThumbsDown, ShieldAle
 import { useSort, type SortState } from '../composables/useSort'
 import SortTh from '../components/SortTh.vue'
 import ExplanationState from '../components/ExplanationState.vue'
+import { formatBytes, formatPps } from '../utils/format'
 
 const store = useAiStore()
 const page = ref(0)
@@ -105,17 +106,7 @@ async function setFeedback(fb: string | null) {
 }
 
 function formatBytesShort(b: number | null): string {
-  if (b == null) return '—'
-  if (b >= 1e9) return (b / 1e9).toFixed(2) + ' GB'
-  if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB'
-  if (b >= 1e3) return (b / 1e3).toFixed(1) + ' kB'
-  return b + ' B'
-}
-
-function formatPps(pps: number): string {
-  if (pps >= 1e6) return (pps / 1e6).toFixed(1) + ' Mpps'
-  if (pps >= 1e3) return (pps / 1e3).toFixed(1) + ' kpps'
-  return pps.toFixed(0) + ' pps'
+  return b == null ? '—' : formatBytes(b)
 }
 </script>
 

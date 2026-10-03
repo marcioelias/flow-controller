@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatBytes } from '../utils/format'
 import { ref, watch, onUnmounted, nextTick } from 'vue'
 import { X, BugPlay, Wifi, WifiOff, Trash2, ExternalLink } from 'lucide-vue-next'
 
@@ -66,11 +67,6 @@ function tcpFlags(f: number): string {
   return set.length ? set.join(' ') : '—'
 }
 
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  if (b < 1048576) return `${(b/1024).toFixed(1)} KB`
-  return `${(b/1048576).toFixed(2)} MB`
-}
 
 function formatTime(sec: number): string {
   const d = new Date(sec * 1000)

@@ -15,7 +15,7 @@ import {
   Filler,
 } from 'chart.js'
 import { TrendingUp, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-vue-next'
-import { formatBytes } from '../utils/format'
+import { formatBytes, formatMbps } from '../utils/format'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler)
 
@@ -318,12 +318,12 @@ onUnmounted(() => {
               <span class="flex items-center gap-1.5 font-medium text-zinc-300">
                 <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_IN }"></span> Entrada
               </span>
-              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsIn.min.toFixed(1) }}</span></span>
-              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsIn.max.toFixed(1) }}</span></span>
-              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsIn.avg.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ formatMbps(statsIn.min) }}</span></span>
+              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ formatMbps(statsIn.max) }}</span></span>
+              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ formatMbps(statsIn.avg) }}</span></span>
             </div>
             <div class="pl-3.5">
-              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsIn.p95.toFixed(1) }}</span> Mbps</span>
+              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ formatMbps(statsIn.p95) }}</span></span>
             </div>
           </div>
           <div class="space-y-1">
@@ -331,12 +331,12 @@ onUnmounted(() => {
               <span class="flex items-center gap-1.5 font-medium text-zinc-300">
                 <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_OUT }"></span> Saída
               </span>
-              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ statsOut.min.toFixed(1) }}</span></span>
-              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ statsOut.max.toFixed(1) }}</span></span>
-              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ statsOut.avg.toFixed(1) }}</span></span>
+              <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ formatMbps(statsOut.min) }}</span></span>
+              <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ formatMbps(statsOut.max) }}</span></span>
+              <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ formatMbps(statsOut.avg) }}</span></span>
             </div>
             <div class="pl-3.5">
-              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ statsOut.p95.toFixed(1) }}</span> Mbps</span>
+              <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ formatMbps(statsOut.p95) }}</span></span>
             </div>
           </div>
         </div>
@@ -349,18 +349,18 @@ onUnmounted(() => {
             <ArrowDown v-if="hasDirection" class="w-3 h-3" :style="{ color: COLOR_IN }" />
             {{ hasDirection ? 'Pico Entrada' : 'Pico' }}
           </p>
-          <p class="text-2xl font-bold text-slate-100">{{ toMbps(peakIn).toFixed(1) }} <span class="text-base font-normal text-zinc-400">Mbps</span></p>
+          <p class="text-2xl font-bold text-slate-100">{{ formatMbps(toMbps(peakIn)) }}</p>
         </div>
         <div v-if="hasDirection" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
           <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
             <ArrowUp class="w-3 h-3" :style="{ color: COLOR_OUT }" />
             Pico Saída
           </p>
-          <p class="text-2xl font-bold text-slate-100">{{ toMbps(peakOut).toFixed(1) }} <span class="text-base font-normal text-zinc-400">Mbps</span></p>
+          <p class="text-2xl font-bold text-slate-100">{{ formatMbps(toMbps(peakOut)) }}</p>
         </div>
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
           <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1">Média</p>
-          <p class="text-2xl font-bold text-slate-100">{{ toMbps(average).toFixed(1) }} <span class="text-base font-normal text-zinc-400">Mbps</span></p>
+          <p class="text-2xl font-bold text-slate-100">{{ formatMbps(toMbps(average)) }}</p>
         </div>
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
           <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1">Volume total</p>

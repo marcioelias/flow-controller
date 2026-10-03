@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatBytes } from '../utils/format'
 import { ref } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { DatabaseBackup, Download, Upload, AlertTriangle, CheckCircle, XCircle } from 'lucide-vue-next'
@@ -33,14 +34,6 @@ const restoreError = ref('')
 const restoreLoading = ref(false)
 const dragOver = ref(false)
 const selectedFile = ref<File | null>(null)
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
-}
 
 function formatNumber(n: number): string {
   return new Intl.NumberFormat('pt-BR').format(n)

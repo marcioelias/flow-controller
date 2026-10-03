@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatBps } from '../utils/format'
 import { ref, onMounted } from 'vue'
 import { ShieldCheck, ShieldX, Copy, Check, KeyRound, RefreshCw } from 'lucide-vue-next'
 
@@ -182,7 +183,7 @@ onMounted(() => {
 
             <div v-if="status.max_bps !== null">
               <dt class="text-zinc-500 font-medium mb-0.5">Largura de banda máx.</dt>
-              <dd class="text-slate-100">{{ (status.max_bps / 1e9).toFixed(1) }} Gbps</dd>
+              <dd class="text-slate-100">{{ formatBps(status.max_bps) }}</dd>
             </div>
 
             <div v-if="status.max_talkers !== null">

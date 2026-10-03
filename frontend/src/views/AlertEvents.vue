@@ -5,7 +5,7 @@ import { Bell, Trash2, RefreshCw, X, Activity, Loader2 } from 'lucide-vue-next'
 import SortTh from '../components/SortTh.vue'
 import ExplanationState from '../components/ExplanationState.vue'
 import type { SortDir, SortState } from '../composables/useSort'
-import { formatBps, formatBytes } from '../utils/format'
+import { formatBps, formatBytes, formatPps } from '../utils/format'
 
 const store = useAlertsStore()
 
@@ -243,7 +243,7 @@ onUnmounted(() => {
               </template>
               <template v-if="hasAttackSignature">
                 <td class="px-4 py-2.5 text-xs text-zinc-400">
-                  <span v-if="ev.pps != null">{{ ev.pps.toFixed(0) }}</span>
+                  <span v-if="ev.pps != null">{{ formatPps(ev.pps) }}</span>
                   <span v-else class="text-zinc-700">—</span>
                 </td>
                 <td class="px-4 py-2.5 text-xs text-zinc-400">
@@ -346,7 +346,7 @@ onUnmounted(() => {
             <div v-else class="grid grid-cols-2 md:grid-cols-3 gap-4">
               <div>
                 <p class="text-xs text-zinc-500">PPS</p>
-                <p class="font-mono text-zinc-200">{{ selected.pps != null ? selected.pps.toFixed(0) : '—' }}</p>
+                <p class="font-mono text-zinc-200">{{ selected.pps != null ? formatPps(selected.pps) : '—' }}</p>
               </div>
               <div>
                 <p class="text-xs text-zinc-500">Pacote médio</p>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatBps } from '../utils/format'
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
@@ -26,9 +27,7 @@ async function loadLicenseInfo() {
   } catch {}
 }
 let licTimer: ReturnType<typeof setInterval> | null = null
-function fmtMbps(bps: number): string {
-  return (bps / 1e6).toFixed(0) + ' Mbps'
-}
+
 const debugOpen      = ref(false)
 const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'
 const appCommit  = typeof __APP_COMMIT__  !== 'undefined' ? __APP_COMMIT__  : 'dev'
@@ -349,8 +348,8 @@ onUnmounted(() => {
         class="px-6 py-2 text-sm bg-amber-500/10 border-b border-amber-500/30 text-amber-400 flex items-center gap-2"
       >
         <span class="font-semibold">Licença:</span>
-        tráfego atual {{ fmtMbps(licInfo.current_bps) }} acima do limite de
-        {{ fmtMbps(licInfo.max_bps) }} — a coleta continua completa; analíticos serão
+        tráfego atual {{ formatBps(licInfo.current_bps) }} acima do limite de
+        {{ formatBps(licInfo.max_bps) }} — a coleta continua completa; analíticos serão
         limitados após 7 dias de excedente.
       </div>
 

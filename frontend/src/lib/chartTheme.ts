@@ -1,3 +1,5 @@
+import { formatMbps } from '../utils/format'
+
 // Tema único dos gráficos de tráfego (ao vivo + histórico).
 // Pares validados via dataviz validate_palette na surface dark (zinc-900):
 // in/out deutan ΔE 10.0; v4/v6 deutan ΔE 23+ — todos os checks PASS.
@@ -100,7 +102,7 @@ export const mirroredLegend = {
 /** Tooltip de gráfico espelhado: saída é negativa, exibe valor absoluto */
 export const mirroredTooltip = {
   callbacks: {
-    label: (ctx: any) => ` ${ctx.dataset.label}: ${Math.abs(ctx.parsed.y).toFixed(2)} Mbps`,
+    label: (ctx: any) => ` ${ctx.dataset.label}: ${formatMbps(Math.abs(ctx.parsed.y))}`,
   },
 }
 
@@ -108,6 +110,6 @@ export const mirroredTooltip = {
 export function mirroredYTicks(color = '#9ca3af') {
   return {
     color,
-    callback: (v: any) => Math.abs(v).toFixed(1) + ' Mbps',
+    callback: (v: any) => formatMbps(Math.abs(v)),
   }
 }

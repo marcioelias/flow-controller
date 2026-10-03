@@ -12,7 +12,7 @@ import {
   LayoutDashboard, Activity, Wifi, BarChart2, ArrowDown, ArrowUp,
   Gauge, Zap, Users, Bell, Radio, Flame, Globe2, Database,
 } from 'lucide-vue-next'
-import { bytesToBps, formatBps, formatBytes } from '../utils/format'
+import { bytesToBps, formatBps, formatBytes, formatMbps } from '../utils/format'
 import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from '../composables/useLiveTraffic'
 import { ArrowUpDown } from 'lucide-vue-next'
 import { useSort } from '../composables/useSort'
@@ -534,7 +534,7 @@ onUnmounted(() => {
             <div>
               <h2 class="text-base font-semibold text-slate-200">Tráfego em tempo real</h2>
               <p class="text-xs text-zinc-500 mt-0.5">
-                {{ liveTotalBps.toFixed(1) }} Mbps (média 10s) — preenche retroativo conforme flows expiram
+                {{ formatMbps(liveTotalBps) }} (média 10s) — preenche retroativo conforme flows expiram
               </p>
             </div>
             <div class="flex items-center gap-3">
@@ -575,12 +575,12 @@ onUnmounted(() => {
                 <span class="flex items-center gap-1.5 font-medium text-zinc-300">
                   <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_IN }"></span> Entrada
                 </span>
-                <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ liveStatsIn.min.toFixed(1) }}</span></span>
-                <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ liveStatsIn.max.toFixed(1) }}</span></span>
-                <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ liveStatsIn.avg.toFixed(1) }}</span></span>
+                <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ formatMbps(liveStatsIn.min) }}</span></span>
+                <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ formatMbps(liveStatsIn.max) }}</span></span>
+                <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ formatMbps(liveStatsIn.avg) }}</span></span>
               </div>
               <div class="pl-3.5">
-                <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ liveStatsIn.p95.toFixed(1) }}</span> Mbps</span>
+                <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ formatMbps(liveStatsIn.p95) }}</span></span>
               </div>
             </div>
             <div class="space-y-1">
@@ -588,12 +588,12 @@ onUnmounted(() => {
                 <span class="flex items-center gap-1.5 font-medium text-zinc-300">
                   <span class="w-2 h-2 rounded-full" :style="{ background: COLOR_OUT }"></span> Saída
                 </span>
-                <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ liveStatsOut.min.toFixed(1) }}</span></span>
-                <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ liveStatsOut.max.toFixed(1) }}</span></span>
-                <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ liveStatsOut.avg.toFixed(1) }}</span></span>
+                <span class="text-zinc-500">mín <span class="text-zinc-300 font-mono">{{ formatMbps(liveStatsOut.min) }}</span></span>
+                <span class="text-zinc-500">máx <span class="text-zinc-300 font-mono">{{ formatMbps(liveStatsOut.max) }}</span></span>
+                <span class="text-zinc-500">méd <span class="text-zinc-300 font-mono">{{ formatMbps(liveStatsOut.avg) }}</span></span>
               </div>
               <div class="pl-3.5">
-                <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ liveStatsOut.p95.toFixed(1) }}</span> Mbps</span>
+                <span class="text-zinc-500">95% <span class="text-emerald-400 font-mono">{{ formatMbps(liveStatsOut.p95) }}</span></span>
               </div>
             </div>
           </div>
