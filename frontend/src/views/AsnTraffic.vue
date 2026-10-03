@@ -9,7 +9,7 @@ import {
   Legend,
 } from 'chart.js'
 import { Globe, RefreshCw } from 'lucide-vue-next'
-import { formatBytes, formatNumber } from '../utils/format'
+import { formatBps } from '../utils/format'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
@@ -24,8 +24,8 @@ interface Exporter {
 interface AsnRow {
   asn: number
   label: string
-  total_bytes: number
-  total_packets: number
+  p95_bps: number
+  avg_bps: number
 }
 
 const CHART_COLORS = [
@@ -53,9 +53,9 @@ const top8 = computed(() => rows.value.slice(0, 8))
 
 const donutChartData = computed(() => {
   const top = top8.value
-  const otherBytes = rows.value.slice(8).reduce((s, r) => s + r.total_bytes, 0)
-  const labels = [...top.map((r) => r.label), ...(otherBytes > 0 ? ['Other'] : [])]
-  const data = [...top.map((r) => r.total_bytes), ...(otherBytes > 0 ? [otherBytes] : [])]
+  const otherBps = rows.value.slice(8).reduce((s, r) => s + r.p95_bps, 0)
+  const labels = [...top.map((r) => r.label), ...(otherBps > 0 ? ['Other'] : [])]
+  const data = [...top.map((r) => r.p95_bps), ...(otherBps > 0 ? [otherBps] : [])]
   return {
     labels,
     datasets: [
@@ -75,7 +75,7 @@ const donutOptions = {
     legend: { position: 'bottom' as const, labels: { color: '#e5e7eb' } },
     tooltip: {
       callbacks: {
-        label: (ctx: any) => ` ${formatBytes(ctx.parsed)}`,
+        label: (ctx: any) => ` p95 ${formatBps(ctx.parsed)}`,
       },
     },
   },
@@ -147,7 +147,7 @@ onUnmounted(() => {
             <Globe class="w-6 h-6 text-emerald-500" />
             ASN Traffic
           </h1>
-          <p class="text-zinc-400 mt-1">Tráfego por Autonomous System</p>
+          <p class="text-zinc-400 mt-1">Taxa p95 por Autonomous System (buckets de 1 min)</p>
         </div>
 
         <div class="flex items-center gap-3">
@@ -203,7 +203,7 @@ onUnmounted(() => {
       <div v-else class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Doughnut chart -->
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 flex flex-col items-center">
-          <h2 class="text-base font-semibold text-zinc-300 mb-4 self-start">Top ASNs</h2>
+          <h2 class="text-base font-semibold text-zinc-300 mb-4 self-start">Top ASNs (p95)</h2>
           <div class="h-64 w-full">
             <Doughnut v-if="top8.length > 0" :data="donutChartData" :options="donutOptions" />
           </div>
@@ -219,8 +219,8 @@ onUnmounted(() => {
               <tr class="border-b border-zinc-800 text-zinc-400 text-left">
                 <th class="px-6 py-3 font-medium">ASN</th>
                 <th class="px-6 py-3 font-medium">Label</th>
-                <th class="px-6 py-3 font-medium text-right">Tráfego</th>
-                <th class="px-6 py-3 font-medium text-right">Pacotes</th>
+                <th class="px-6 py-3 font-medium text-right">95º perc.</th>
+                <th class="px-6 py-3 font-medium text-right">Média</th>
               </tr>
             </thead>
             <tbody>
@@ -231,8 +231,8 @@ onUnmounted(() => {
               >
                 <td class="px-6 py-3 font-mono text-zinc-400">{{ row.asn }}</td>
                 <td class="px-6 py-3 text-slate-200 font-medium">{{ row.label }}</td>
-                <td class="px-6 py-3 text-right text-emerald-400 font-medium">{{ formatBytes(row.total_bytes) }}</td>
-                <td class="px-6 py-3 text-right text-zinc-300">{{ formatNumber(row.total_packets) }}</td>
+                <td class="px-6 py-3 text-right text-emerald-400 font-medium tabular-nums">{{ formatBps(row.p95_bps) }}</td>
+                <td class="px-6 py-3 text-right text-zinc-300 tabular-nums">{{ formatBps(row.avg_bps) }}</td>
               </tr>
             </tbody>
           </table>

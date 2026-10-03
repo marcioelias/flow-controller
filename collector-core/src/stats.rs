@@ -236,6 +236,9 @@ pub struct AsnQuery {
 pub struct AsnRow {
     pub asn: u64,
     pub label: String,
+    /// nearest-rank p95 of zero-filled 1-minute buckets over the window (bps)
+    pub p95_bps: u64,
+    pub avg_bps: u64,
     pub total_bytes: u64,
     pub total_packets: u64,
 }
@@ -244,86 +247,99 @@ pub async fn get_asn_stats_handler(
     State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<AsnQuery>,
 ) -> Result<Json<Vec<AsnRow>>, StatusCode> {
-    let minutes = params.minutes.unwrap_or(60).min(1440);
+    let minutes = params.minutes.unwrap_or(60).clamp(1, 1440);
     let requested = params.limit.unwrap_or(20).min(100);
     let (limit, _) = license_gate(&state, requested)?;
     let direction = params.direction.as_deref().unwrap_or("both");
 
-    let mut merged: HashMap<u64, (u64, u64)> = HashMap::new();
+    let sql = build_asn_query(params.exporter_ip.as_deref(), minutes, limit, direction);
+    let val = ch_query(&sql).await?;
 
-    for table in &["network_flows_v4", "network_flows_v6"] {
-        let sql = build_asn_query(
-            table,
-            params.exporter_ip.as_deref(),
-            minutes,
-            limit,
-            direction,
-        );
-        let val = ch_query(&sql).await?;
-        for row in val["data"].as_array().cloned().unwrap_or_default() {
-            let asn = parse_u64_field(&row["asn"]);
-            let bytes = parse_u64_field(&row["total_bytes"]);
-            let pkts = parse_u64_field(&row["total_packets"]);
-            let e = merged.entry(asn).or_insert((0, 0));
-            e.0 += bytes;
-            e.1 += pkts;
-        }
-    }
-
-    let mut rows: Vec<AsnRow> = merged
+    let rows = val["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
         .into_iter()
-        .map(|(asn, (bytes, pkts))| AsnRow {
-            asn,
-            label: if asn == 0 {
-                "Unknown".to_string()
-            } else {
-                format!("AS{asn}")
-            },
-            total_bytes: bytes,
-            total_packets: pkts,
+        .map(|row| {
+            let asn = parse_u64_field(&row["asn"]);
+            let total_bytes = parse_u64_field(&row["total_bytes"]);
+            AsnRow {
+                asn,
+                label: if asn == 0 {
+                    "Unknown".to_string()
+                } else {
+                    format!("AS{asn}")
+                },
+                p95_bps: parse_u64_field(&row["p95_bps"]),
+                avg_bps: total_bytes * 8 / (minutes as u64 * 60),
+                total_bytes,
+                total_packets: parse_u64_field(&row["total_packets"]),
+            }
         })
         .collect();
 
-    rows.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
-    rows.truncate(limit as usize);
     Ok(Json(rows))
 }
 
-fn build_asn_query(
-    table: &str,
-    exporter_ip: Option<&str>,
-    minutes: u32,
-    limit: u32,
-    direction: &str,
-) -> String {
-    let time_filter = match safe_ip(exporter_ip) {
-        Some(ip) => format!(
-            "WHERE exporter_ip = '{}' AND timestamp >= now() - INTERVAL {} MINUTE",
-            ip, minutes
-        ),
-        None => format!("WHERE timestamp >= now() - INTERVAL {} MINUTE", minutes),
-    };
+/// 1-based position, among buckets sorted descending, of the nearest-rank p95
+/// of `buckets` values. Buckets where the ASN was silent are zeros at the
+/// bottom, so only the non-zero ones need to be sorted.
+fn p95_desc_position(buckets: u32) -> u32 {
+    let rank = (buckets as f64 * 0.95).ceil() as u32;
+    buckets - rank + 1
+}
 
-    match direction {
-        "src" => format!(
-            "SELECT src_asn AS asn, sum(bytes) AS total_bytes, sum(packets) AS total_packets \
-             FROM {table} {time_filter} AND src_asn != 0 \
-             GROUP BY src_asn ORDER BY total_bytes DESC LIMIT {limit} FORMAT JSON"
-        ),
-        "dst" => format!(
-            "SELECT dst_asn AS asn, sum(bytes) AS total_bytes, sum(packets) AS total_packets \
-             FROM {table} {time_filter} AND dst_asn != 0 \
-             GROUP BY dst_asn ORDER BY total_bytes DESC LIMIT {limit} FORMAT JSON"
-        ),
-        _ => format!(
-            "SELECT asn, sum(total_bytes) AS total_bytes, sum(total_packets) AS total_packets FROM (\
-               SELECT src_asn AS asn, sum(bytes) AS total_bytes, sum(packets) AS total_packets \
-               FROM {table} {time_filter} AND src_asn != 0 GROUP BY src_asn \
-               UNION ALL \
-               SELECT dst_asn AS asn, sum(bytes) AS total_bytes, sum(packets) AS total_packets \
-               FROM {table} {time_filter} AND dst_asn != 0 GROUP BY dst_asn\
-             ) GROUP BY asn ORDER BY total_bytes DESC LIMIT {limit} FORMAT JSON"
-        ),
+fn build_asn_query(exporter_ip: Option<&str>, minutes: u32, limit: u32, direction: &str) -> String {
+    let filter = match safe_ip(exporter_ip) {
+        Some(ip) => format!("WHERE exporter_ip = '{ip}' AND "),
+        None => "WHERE ".to_string(),
+    };
+    // Complete minutes only: the open one would understate its bucket
+    let window = format!(
+        "timestamp >= toStartOfMinute(now()) - INTERVAL {minutes} MINUTE \
+         AND timestamp < toStartOfMinute(now())"
+    );
+
+    let side = |table: &str, col: &str| {
+        format!(
+            "SELECT {col} AS asn, toStartOfMinute(timestamp) AS minute, bytes, packets \
+             FROM {table} {filter}{window} AND {col} != 0"
+        )
+    };
+    let cols: &[&str] = match direction {
+        "src" => &["src_asn"],
+        "dst" => &["dst_asn"],
+        _ => &["src_asn", "dst_asn"],
+    };
+    let sources = ["network_flows_v4", "network_flows_v6"]
+        .iter()
+        .flat_map(|t| cols.iter().map(move |c| side(t, c)))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+
+    let pos = p95_desc_position(minutes);
+    format!(
+        "SELECT asn, sum(b) AS total_bytes, sum(p) AS total_packets, \
+                intDiv(arrayElement(arrayReverseSort(groupArray(b)), {pos}) * 8, 60) AS p95_bps \
+         FROM (\
+           SELECT asn, minute, sum(bytes) AS b, sum(packets) AS p \
+           FROM ({sources}) GROUP BY asn, minute\
+         ) GROUP BY asn ORDER BY p95_bps DESC, total_bytes DESC LIMIT {limit} FORMAT JSON"
+    )
+}
+
+#[cfg(test)]
+mod asn_tests {
+    use super::p95_desc_position;
+
+    #[test]
+    fn p95_position_matches_nearest_rank() {
+        // 60 buckets: rank 57 ascending = 4th largest
+        assert_eq!(p95_desc_position(60), 4);
+        // 15 buckets: rank 15 ascending = the max
+        assert_eq!(p95_desc_position(15), 1);
+        assert_eq!(p95_desc_position(1440), 73);
+        assert_eq!(p95_desc_position(1), 1);
     }
 }
 

@@ -12,7 +12,7 @@ import {
   LayoutDashboard, Activity, Wifi, BarChart2, ArrowDown, ArrowUp,
   Gauge, Zap, Users, Bell, Radio, Flame, Globe2, Database,
 } from 'lucide-vue-next'
-import { formatBytes } from '../utils/format'
+import { formatBps, formatBytes } from '../utils/format'
 import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from '../composables/useLiveTraffic'
 import { ArrowUpDown } from 'lucide-vue-next'
 import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, loadMirrorFlip, saveMirrorFlip, type FamFilter } from '../lib/chartTheme'
@@ -52,7 +52,7 @@ const selectedDevice = ref<string | null>(null)
 const protocolStats = ref({ tcp: 0, udp: 0, icmp: 0, other: 0 })
 const overview = ref<Overview | null>(null)
 const topTalkers = ref<TopTalker[]>([])
-interface AsnEntry { asn: number; label: string; total_bytes: number }
+interface AsnEntry { asn: number; label: string; p95_bps: number }
 const topAsns = ref<AsnEntry[]>([])
 const recentAlerts = ref<AlertEvent[]>([])
 const canSeeAlerts = ref(true)
@@ -118,12 +118,6 @@ const donutOptions: any = {
 }
 
 // ── formatting helpers ──
-function formatBps(bps: number): string {
-  if (bps >= 1e9) return (bps / 1e9).toFixed(2) + ' Gbps'
-  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' Mbps'
-  if (bps >= 1e3) return (bps / 1e3).toFixed(1) + ' kbps'
-  return bps.toFixed(0) + ' bps'
-}
 function formatCount(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'
@@ -210,7 +204,7 @@ async function loadTopAsns() {
     if (res.ok) topAsns.value = await res.json()
   } catch {}
 }
-const maxAsnBytes = computed(() => Math.max(1, ...topAsns.value.map((a) => a.total_bytes)))
+const maxAsnBps = computed(() => Math.max(1, ...topAsns.value.map((a) => a.p95_bps)))
 
 async function loadRecentAlerts() {
   if (!canSeeAlerts.value) return
@@ -680,11 +674,11 @@ onUnmounted(() => {
                   <span class="text-zinc-300 truncate">
                     <span class="font-mono text-zinc-500">AS{{ a.asn }}</span> {{ a.label }}
                   </span>
-                  <span class="text-zinc-500 font-mono shrink-0 ml-2">{{ formatBytes(a.total_bytes) }}</span>
+                  <span class="text-zinc-500 font-mono shrink-0 ml-2">{{ formatBps(a.p95_bps) }}</span>
                 </div>
                 <div class="h-1 bg-zinc-800 rounded-full overflow-hidden">
                   <div class="h-full rounded-full bg-sky-400/70"
-                    :style="{ width: (a.total_bytes / maxAsnBytes) * 100 + '%' }"></div>
+                    :style="{ width: (a.p95_bps / maxAsnBps) * 100 + '%' }"></div>
                 </div>
               </li>
             </ul>
