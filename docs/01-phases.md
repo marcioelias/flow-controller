@@ -384,6 +384,8 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 |------|-----------|--------|
 | 17.1 Análise detalhada de um talker (up/down, conversas, portas) | `tasks/task-17.1-talker-detail.md` | ✅ |
 | 17.2 Taxas em bps nas views analíticas + portas por serviço | `tasks/task-17.2-rates-and-service-ports.md` | ✅ |
+| 17.3 Ordenação por coluna em todas as tabelas | `tasks/task-17.3-sortable-tables.md` | 🔲 |
+| 17.4 Detalhe do evento de alerta | `tasks/task-17.4-alert-event-detail.md` | 🔲 |
 
 ---
 
