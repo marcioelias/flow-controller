@@ -108,14 +108,15 @@ Returns protocol byte distribution.
 ---
 
 ### GET /api/stats/top-talkers  ← NEW (task 2.1)
-Top source IPs by byte volume.
+Top source IPs ranked by p95 rate (complete 1-minute buckets, zero-filled; task 17.2).
 
 **Query params:** `exporter_ip?`, `minutes?` (default 5), `limit?` (default 20, max 100)
 
 **Response 200:**
 ```json
 [
-  { "src_ip": "192.168.1.100", "total_bytes": 104857600, "total_packets": 75000, "flow_count": 250 },
+  { "src_ip": "192.168.1.100", "p95_bps": 4400000, "avg_bps": 2800000, "total_bytes": 104857600,
+    "total_packets": 75000, "flow_count": 250, "in_bytes": 0, "out_bytes": 104857600, "unknown_bytes": 0 },
   ...
 ]
 ```
@@ -150,15 +151,15 @@ aggregated conversations `(peer, protocol, service port)` and top service ports.
 ---
 
 ### GET /api/stats/ports  ← NEW (task 2.3)
-Top destination ports by byte volume.
+Top service ports (`least(src_port, dst_port)`, both directions summed) ranked by p95 rate (task 17.2).
 
 **Query params:** `exporter_ip?`, `minutes?` (default 5), `limit?` (default 20)
 
 **Response 200:**
 ```json
 [
-  { "dst_port": 443, "service": "HTTPS", "total_bytes": 52428800, "total_packets": 40000 },
-  { "dst_port": 80,  "service": "HTTP",  "total_bytes": 10485760, "total_packets": 8000 },
+  { "port": 443, "service": "HTTPS", "p95_bps": 812000000, "avg_bps": 640000000,
+    "total_bytes": 24000000000, "total_packets": 18000000, "share_pct": 61.4 },
   ...
 ]
 ```
