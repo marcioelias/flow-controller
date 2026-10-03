@@ -151,11 +151,12 @@ pub async fn get_top_talkers_handler(
                 sumIf(bytes, direction = 0) AS in_bytes, \
                 sumIf(bytes, direction = 1) AS out_bytes, \
                 sumIf(bytes, direction = 255) AS unknown_bytes";
+    // IPv4 e IPv6 nativos não têm supertipo no UNION ALL: as duas pernas viram String
     let sql = format!(
-        "SELECT src_ip, {cols} \
+        "SELECT toString(src_ip) AS src_ip, {cols} \
          FROM network_flows_v4 {wc} GROUP BY src_ip ORDER BY total_bytes DESC LIMIT {limit} \
          UNION ALL \
-         SELECT src_ip, {cols} \
+         SELECT toString(src_ip) AS src_ip, {cols} \
          FROM network_flows_v6 {wc} GROUP BY src_ip ORDER BY total_bytes DESC LIMIT {limit} \
          FORMAT JSON"
     );
@@ -573,10 +574,10 @@ pub async fn get_exporter_summary_handler(
                 sumIf(bytes, direction = 1) AS out_bytes, \
                 sumIf(bytes, direction = 255) AS unknown_bytes";
     let sql = format!(
-        "SELECT exporter_ip, {cols} \
+        "SELECT toString(exporter_ip) AS exporter_ip, {cols} \
          FROM network_flows_v4 {time_filter} GROUP BY exporter_ip ORDER BY total_bytes DESC \
          UNION ALL \
-         SELECT exporter_ip, {cols} \
+         SELECT toString(exporter_ip) AS exporter_ip, {cols} \
          FROM network_flows_v6 {time_filter} GROUP BY exporter_ip ORDER BY total_bytes DESC \
          FORMAT JSON"
     );
