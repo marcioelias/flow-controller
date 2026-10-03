@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Monitor, Plus, Edit, Trash2 } from 'lucide-vue-next'
+import { roleLabel, type ExporterRole } from '../utils/device'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -15,6 +16,7 @@ interface Exporter {
   description: string | null
   location: string | null
   enabled: boolean
+  role: ExporterRole
   created_at: string
   updated_at: string
 }
@@ -25,6 +27,12 @@ interface ExporterSummary {
 }
 
 const exporters = ref<Exporter[]>([])
+
+const roleBadge: Record<ExporterRole, string> = {
+  borda: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
+  bng: 'bg-sky-500/10 text-sky-400 border border-sky-500/20',
+  cgnat: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+}
 const directionModes = ref<Record<string, string>>({})
 const loading = ref(false)
 const error = ref('')
@@ -204,6 +212,9 @@ onMounted(() => {
                     ]"
                   >
                     {{ exporter.enabled ? 'Ativo' : 'Inativo' }}
+                  </span>
+                  <span :class="['px-2 py-1 text-xs font-medium rounded', roleBadge[exporter.role ?? 'borda']]" title="Papel do exportador">
+                    {{ roleLabel(exporter.role ?? 'borda') }}
                   </span>
                   <span
                     v-if="directionModes[exporter.ip_address]"

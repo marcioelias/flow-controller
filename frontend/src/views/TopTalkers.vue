@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import DeviceSelect from '../components/DeviceSelect.vue'
+import { applyDevice, DEFAULT_DEVICE, type DeviceValue } from '../utils/device'
 import { Bar } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -23,12 +25,6 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 const authStore = useAuthStore()
 const router = useRouter()
 
-interface Exporter {
-  id: number
-  ip_address: string
-  name: string
-}
-
 interface TopTalker {
   src_ip: string
   total_bytes: number
@@ -39,8 +35,7 @@ interface TopTalker {
   ip_class: 'cgnat' | 'internal' | 'internet'
 }
 
-const exporters = ref<Exporter[]>([])
-const selectedDevice = ref<string>('')
+const selectedDevice = ref<DeviceValue>(DEFAULT_DEVICE)
 const selectedMinutes = ref(5)
 const rows = ref<TopTalker[]>([])
 const loading = ref(false)
@@ -104,15 +99,6 @@ const barChartOptions = {
   },
 }
 
-async function loadExporters() {
-  try {
-    const res = await fetch('/api/exporters/enabled', {
-      headers: authStore.getAuthHeaders(),
-    })
-    if (res.ok) exporters.value = await res.json()
-  } catch {}
-}
-
 async function loadData() {
   loading.value = true
   try {
@@ -120,7 +106,7 @@ async function loadData() {
       minutes: String(selectedMinutes.value),
       limit: '50',
     })
-    if (selectedDevice.value) params.set('exporter_ip', selectedDevice.value)
+    applyDevice(params, selectedDevice.value)
     const res = await fetch(`/api/stats/top-talkers?${params}`, {
       headers: authStore.getAuthHeaders(),
     })
@@ -136,7 +122,6 @@ async function loadData() {
 let timer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
-  loadExporters()
   loadData()
   timer = setInterval(loadData, 30000)
 })
@@ -182,16 +167,7 @@ onUnmounted(() => {
             />
           </form>
 
-          <select
-            v-model="selectedDevice"
-            @change="loadData"
-            class="appearance-none pl-3 pr-8 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 cursor-pointer"
-          >
-            <option value="">Todos os Dispositivos</option>
-            <option v-for="exp in exporters" :key="exp.id" :value="exp.ip_address">
-              {{ exp.name }} ({{ exp.ip_address }})
-            </option>
-          </select>
+          <DeviceSelect v-model="selectedDevice" @change="loadData" />
 
           <select
             v-model="selectedMinutes"

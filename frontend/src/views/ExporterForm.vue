@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { Card, CardContent } from '@/components/ui/card'
 import { Save } from 'lucide-vue-next'
+import { ROLE_LABELS, type ExporterRole } from '../utils/device'
 
 const router = useRouter()
 const route = useRoute()
@@ -17,8 +18,15 @@ const form = ref({
   name: '',
   description: '',
   location: '',
-  enabled: true
+  enabled: true,
+  role: 'borda' as ExporterRole
 })
+
+const roleHelp: Record<ExporterRole, string> = {
+  borda: 'Conta nos totais do AS',
+  bng: 'Visão por assinante (100.64)',
+  cgnat: 'Tradução público ↔ privado',
+}
 
 const loading = ref(false)
 const saving = ref(false)
@@ -47,7 +55,8 @@ async function loadExporter() {
       name: data.name,
       description: data.description || '',
       location: data.location || '',
-      enabled: data.enabled
+      enabled: data.enabled,
+      role: data.role || 'borda'
     }
   } catch (e: any) {
     error.value = e.message
@@ -74,7 +83,8 @@ async function save() {
           ...(form.value.name && { name: form.value.name }),
           description: form.value.description || null,
           location: form.value.location || null,
-          enabled: form.value.enabled
+          enabled: form.value.enabled,
+          role: form.value.role
         }
       : {
           // For create, send all required fields
@@ -82,7 +92,8 @@ async function save() {
           name: form.value.name,
           description: form.value.description || null,
           location: form.value.location || null,
-          enabled: form.value.enabled
+          enabled: form.value.enabled,
+          role: form.value.role
         }
 
     const response = await fetch(url, {
@@ -181,6 +192,21 @@ onMounted(() => {
                 placeholder="Router Principal"
                 class="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-slate-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
               />
+            </div>
+
+            <!-- Role -->
+            <div>
+              <label for="role" class="block text-sm font-medium text-zinc-300 mb-2">
+                Papel
+              </label>
+              <select
+                id="role"
+                v-model="form.role"
+                class="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent cursor-pointer"
+              >
+                <option v-for="(label, role) in ROLE_LABELS" :key="role" :value="role">{{ label }}</option>
+              </select>
+              <p class="mt-1 text-xs text-zinc-500">{{ roleHelp[form.role] }}</p>
             </div>
 
             <!-- Location -->

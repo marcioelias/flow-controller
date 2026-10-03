@@ -37,20 +37,25 @@ use std::time::{Duration, Instant};
 
 type AllowedSet = Arc<DashSet<Ipv4Addr>>;
 
-async fn refresh_whitelist(pool: sqlx::SqlitePool, set: AllowedSet) {
+/// Diff, nunca clear+insert: entre o clear e o primeiro insert os leitores
+/// viam o set vazio (receptores bloqueavam exporter válido por alguns micros)
+fn sync_set(set: &AllowedSet, ips: Vec<Ipv4Addr>) {
+    let fresh: std::collections::HashSet<Ipv4Addr> = ips.into_iter().collect();
+    for ip in &fresh {
+        set.insert(*ip);
+    }
+    set.retain(|ip| fresh.contains(ip));
+}
+
+async fn refresh_whitelist(pool: sqlx::SqlitePool, set: AllowedSet, border: AllowedSet) {
     loop {
         match exporters::fetch_enabled_ips(&pool).await {
-            Ok(ips) => {
-                // Diff, nunca clear+insert: entre o clear e o primeiro insert
-                // os receptores viam o set vazio e bloqueavam exporter válido
-                // por alguns micros a cada 30s
-                let fresh: std::collections::HashSet<Ipv4Addr> = ips.into_iter().collect();
-                for ip in &fresh {
-                    set.insert(*ip);
-                }
-                set.retain(|ip| fresh.contains(ip));
-            }
+            Ok(ips) => sync_set(&set, ips),
             Err(e) => tracing::error!("whitelist refresh error: {e}"),
+        }
+        match exporters::fetch_border_ips(&pool).await {
+            Ok(ips) => sync_set(&border, ips),
+            Err(e) => tracing::error!("border set refresh error: {e}"),
         }
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
@@ -558,11 +563,17 @@ fn main() -> anyhow::Result<()> {
         allowed_set.insert(ip);
     }
     tracing::info!("Whitelist cache loaded ({} entries)", allowed_set.len());
+    let border_set: AllowedSet = Arc::new(DashSet::new());
+    sync_set(
+        &border_set,
+        rt.block_on(exporters::fetch_border_ips(&auth_db))?,
+    );
 
     // Background refresh every 30 seconds
     let refresh_pool = auth_db.clone();
     let refresh_set = allowed_set.clone();
-    rt.spawn(async move { refresh_whitelist(refresh_pool, refresh_set).await });
+    let refresh_border = border_set.clone();
+    rt.spawn(async move { refresh_whitelist(refresh_pool, refresh_set, refresh_border).await });
 
     // Setup broadcast channel for WebSockets
     let (ws_tx, _) = broadcast::channel::<LiveFlowStats>(100);
@@ -821,6 +832,7 @@ fn main() -> anyhow::Result<()> {
     let exporter_clone = Arc::clone(&exporter_client);
     let ml_tx_ch = ml_tx.clone();
     let exporter_metrics = collector_metrics.clone();
+    let live_border = border_set.clone();
     rt.spawn(async move {
         tracing::info!("Clickhouse Exporter background task started.");
         let mut last_ml_drop_warn = Instant::now() - Duration::from_secs(10);
@@ -885,8 +897,13 @@ fn main() -> anyhow::Result<()> {
                     let mut dir_seen: std::collections::HashMap<Ipv4Addr, (bool, bool)> =
                         std::collections::HashMap::new();
                     for ((slice_sec, key), m) in map.iter() {
-                        window_total_bytes += m.bytes;
-                        if live_wanted {
+                        // Global live totals count border exporters only, so
+                        // the same packet seen by BNG/CGNAT isn't summed (17.9)
+                        let border = live_border.contains(&key.exporter_ip);
+                        if border {
+                            window_total_bytes += m.bytes;
+                        }
+                        if live_wanted && border {
                             let t = slice_totals.entry(*slice_sec).or_default();
                             let v6 = matches!(key.src_ip, flow_types::IpAddrType::V6(_));
                             let out = key.direction == flow_types::DIRECTION_EGRESS;
@@ -902,7 +919,9 @@ fn main() -> anyhow::Result<()> {
                         match key.direction {
                             flow_types::DIRECTION_INGRESS => {
                                 seen.0 = true;
-                                window_bytes_in += m.bytes;
+                                if border {
+                                    window_bytes_in += m.bytes;
+                                }
                                 if live_wanted {
                                     *per_device_in
                                         .entry(key.exporter_ip.to_string())
@@ -911,7 +930,9 @@ fn main() -> anyhow::Result<()> {
                             }
                             flow_types::DIRECTION_EGRESS => {
                                 seen.1 = true;
-                                window_bytes_out += m.bytes;
+                                if border {
+                                    window_bytes_out += m.bytes;
+                                }
                                 if live_wanted {
                                     *per_device_out
                                         .entry(key.exporter_ip.to_string())
@@ -919,7 +940,9 @@ fn main() -> anyhow::Result<()> {
                                 }
                             }
                             _ => {
-                                window_bytes_in += m.bytes;
+                                if border {
+                                    window_bytes_in += m.bytes;
+                                }
                                 if live_wanted {
                                     *per_device_in
                                         .entry(key.exporter_ip.to_string())

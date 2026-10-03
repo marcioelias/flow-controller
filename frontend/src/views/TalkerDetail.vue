@@ -18,6 +18,8 @@ import { bytesToBps, formatBps, formatBytes, formatNumber } from '../utils/forma
 import { useSort } from '../composables/useSort'
 import SortTh from '../components/SortTh.vue'
 import NetClassBadge from '../components/NetClassBadge.vue'
+import DeviceSelect from '../components/DeviceSelect.vue'
+import { applyDevice, deviceRole, roleLabel, DEFAULT_DEVICE, type DeviceValue } from '../utils/device'
 import {
   COLOR_IN,
   COLOR_OUT,
@@ -32,12 +34,6 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip,
 const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-
-interface Exporter {
-  id: number
-  ip_address: string
-  name: string
-}
 
 type NetClass = 'cgnat' | 'internal' | 'internet'
 type Scope = 'all' | 'internet' | 'internal'
@@ -78,11 +74,14 @@ interface TalkerDetail {
   series: { t: number; up_bps: number; down_bps: number }[]
   conversations: Conversation[]
   ports: PortRow[]
+  role: string
+  seen_on: { role: string; bytes: number }[]
 }
 
 const ip = computed(() => String(route.params.ip))
-const exporters = ref<Exporter[]>([])
-const selectedDevice = ref<string>('')
+// Sem escolha explícita o backend escolhe o papel onde o IP mais aparece (task 17.9 R-04)
+const selectedDevice = ref<DeviceValue>(DEFAULT_DEVICE)
+const deviceChosen = ref(false)
 const selectedMinutes = ref(5)
 const detail = ref<TalkerDetail | null>(null)
 const loading = ref(false)
@@ -212,11 +211,14 @@ function toggleFlip() {
   saveMirrorFlip(flip.value)
 }
 
-async function loadExporters() {
-  try {
-    const res = await fetch('/api/exporters/enabled', { headers: authStore.getAuthHeaders() })
-    if (res.ok) exporters.value = await res.json()
-  } catch {}
+function onDeviceChange() {
+  deviceChosen.value = true
+  loadData()
+}
+
+function selectRole(role: string) {
+  selectedDevice.value = `role:${role}`
+  onDeviceChange()
 }
 
 async function loadData() {
@@ -227,11 +229,15 @@ async function loadData() {
       minutes: String(selectedMinutes.value),
       scope: scope.value,
     })
-    if (selectedDevice.value) params.set('exporter_ip', selectedDevice.value)
+    if (deviceChosen.value) applyDevice(params, selectedDevice.value)
     const res = await fetch(`/api/stats/talker?${params}`, { headers: authStore.getAuthHeaders() })
     paywalled.value = res.status === 402
     invalidIp.value = res.status === 400
-    if (res.ok) detail.value = await res.json()
+    if (res.ok) {
+      const body: TalkerDetail = await res.json()
+      detail.value = body
+      if (!deviceChosen.value && body.role) selectedDevice.value = `role:${body.role}`
+    }
   } catch {
     detail.value = null
   } finally {
@@ -259,11 +265,12 @@ function onWindowChange() {
 
 watch(ip, () => {
   detail.value = null
+  deviceChosen.value = false
+  selectedDevice.value = DEFAULT_DEVICE
   loadData()
 })
 
 onMounted(() => {
-  loadExporters()
   loadData()
   restartTimer()
 })
@@ -299,6 +306,18 @@ onUnmounted(() => {
             <NetClassBadge :cls="detail?.ip_class" />
           </h1>
           <p class="text-zinc-400 mt-1">Análise do talker — upload (como origem) e download (como destino)</p>
+          <div v-if="detail?.seen_on?.length" class="flex flex-wrap items-center gap-1.5 mt-2 text-xs">
+            <span class="text-zinc-500">Visto em:</span>
+            <button
+              v-for="s in detail.seen_on"
+              :key="s.role"
+              class="px-2 py-0.5 rounded-md border transition-colors"
+              :class="deviceRole(selectedDevice) === s.role
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:border-zinc-700'"
+              @click="selectRole(s.role)"
+            >{{ roleLabel(s.role) }} · {{ formatBytes(s.bytes) }}</button>
+          </div>
         </div>
 
         <div class="flex items-center gap-3">
@@ -311,16 +330,7 @@ onUnmounted(() => {
             />
           </form>
 
-          <select
-            v-model="selectedDevice"
-            @change="loadData"
-            class="appearance-none pl-3 pr-8 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 cursor-pointer"
-          >
-            <option value="">Todos os Dispositivos</option>
-            <option v-for="exp in exporters" :key="exp.id" :value="exp.ip_address">
-              {{ exp.name }} ({{ exp.ip_address }})
-            </option>
-          </select>
+          <DeviceSelect v-model="selectedDevice" @change="onDeviceChange" />
 
           <select
             v-model="selectedMinutes"

@@ -169,6 +169,14 @@ Event payloads (`/api/alerts/events/:id`, `/api/ml/events`) carry `explanation_s
 
 ---
 
+### Device scope (task 17.9)
+Every stats endpoint (`protocols`, `top-talkers`, `asn`, `ports`, `timeline`, `overview`, `talker`)
+takes either `exporter_ip` (one box) or `role` (`borda|bng|cgnat`, all enabled boxes of that role).
+Neither → `role=borda`. Roles are never summed together. Exporters carry `role` in CRUD and in
+`/api/stats/exporters`; `/api/stats/talker` returns `role` (used) and `seen_on: [{role, bytes}]`.
+
+---
+
 ### GET /api/stats/ports  ← NEW (task 2.3)
 Top service ports (`least(src_port, dst_port)`, both directions summed) ranked by p95 rate (task 17.2).
 

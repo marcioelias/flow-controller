@@ -11,6 +11,7 @@
 use crate::auth::AppState;
 use crate::license;
 use crate::settings;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,7 +49,10 @@ pub async fn run_enforcer(state: Arc<AppState>) {
         }
 
         let max_bps = { state.license.read().unwrap().max_bps };
-        let current_bps = measure_avg_bps(&state.clickhouse_url).await.unwrap_or(0);
+        let roles = crate::exporters::role_map(&state.db).await;
+        let current_bps = measure_avg_bps(&state.clickhouse_url, &roles)
+            .await
+            .unwrap_or(0);
         let now = chrono_now_secs();
 
         let over = max_bps.map(|m| current_bps > m).unwrap_or(false);
@@ -93,15 +97,18 @@ fn chrono_now_secs() -> i64 {
         .as_secs() as i64
 }
 
-/// Média de bps dos últimos 5 min medida direto no ClickHouse (v4 + v6)
-async fn measure_avg_bps(ch_url: &str) -> Option<u64> {
+/// Média de bps dos últimos 5 min (v4 + v6), medida como a **maior soma entre
+/// os papéis** (task 17.9 R-06): o mesmo tráfego coletado em borda, CGNAT e BNG
+/// não paga 3×, e cadastrar só BNG/CGNAT não deixa de contar.
+async fn measure_avg_bps(ch_url: &str, roles: &HashMap<String, String>) -> Option<u64> {
     let sql = format!(
-        "SELECT sum(b) FROM ( \
-           SELECT sum(bytes) AS b FROM network_flows_v4 \
-             WHERE timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND \
+        "SELECT exporter, sum(b) FROM ( \
+           SELECT toString(exporter_ip) AS exporter, sum(bytes) AS b FROM network_flows_v4 \
+             WHERE timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND GROUP BY exporter \
            UNION ALL \
-           SELECT sum(bytes) AS b FROM network_flows_v6 \
-             WHERE timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND)"
+           SELECT toString(exporter_ip) AS exporter, sum(bytes) AS b FROM network_flows_v6 \
+             WHERE timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND GROUP BY exporter) \
+         GROUP BY exporter FORMAT TSV"
     );
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -113,11 +120,33 @@ async fn measure_avg_bps(ch_url: &str) -> Option<u64> {
         .send()
         .await
         .ok()?
+        .error_for_status()
+        .ok()?
         .text()
         .await
         .ok()?;
-    let bytes: u64 = text.trim().parse().ok()?;
+    let rows = text.lines().filter_map(|line| {
+        let (exporter, bytes) = line.split_once('\t')?;
+        Some((exporter.to_string(), bytes.trim().parse::<u64>().ok()?))
+    });
+    let bytes = max_role_volume(rows, roles);
     Some(bytes * 8 / AVG_WINDOW_SECS)
+}
+
+/// Sums volume per role and returns the largest; unknown exporters count as border
+fn max_role_volume(
+    per_exporter: impl Iterator<Item = (String, u64)>,
+    roles: &HashMap<String, String>,
+) -> u64 {
+    let mut per_role: HashMap<&str, u64> = HashMap::new();
+    for (exporter, bytes) in per_exporter {
+        let role = roles
+            .get(&exporter)
+            .map(String::as_str)
+            .unwrap_or(crate::exporters::DEFAULT_ROLE);
+        *per_role.entry(role).or_default() += bytes;
+    }
+    per_role.into_values().max().unwrap_or(0)
 }
 
 async fn persist_over_since(pool: &sqlx::SqlitePool, value: Option<i64>) {
@@ -131,4 +160,48 @@ async fn persist_over_since(pool: &sqlx::SqlitePool, value: Option<i64>) {
     .bind(v)
     .execute(pool)
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roles() -> HashMap<String, String> {
+        [
+            ("10.0.0.1", "borda"),
+            ("10.0.0.2", "bng"),
+            ("10.0.0.3", "cgnat"),
+        ]
+        .into_iter()
+        .map(|(ip, r)| (ip.to_string(), r.to_string()))
+        .collect()
+    }
+
+    // AC-03 (task 17.9)
+    #[test]
+    fn license_takes_the_largest_role_sum() {
+        let rows = vec![
+            ("10.0.0.1".to_string(), 500),
+            ("10.0.0.2".to_string(), 400),
+            ("10.0.0.3".to_string(), 400),
+        ];
+        assert_eq!(max_role_volume(rows.into_iter(), &roles()), 500);
+    }
+
+    // AC-02 (task 17.9)
+    #[test]
+    fn bng_only_still_counts() {
+        let rows = vec![("10.0.0.2".to_string(), 400)];
+        assert_eq!(max_role_volume(rows.into_iter(), &roles()), 400);
+    }
+
+    #[test]
+    fn same_role_boxes_add_up_and_unknown_is_border() {
+        let rows = vec![
+            ("10.0.0.1".to_string(), 300),
+            ("10.9.9.9".to_string(), 300),
+            ("10.0.0.2".to_string(), 500),
+        ];
+        assert_eq!(max_role_volume(rows.into_iter(), &roles()), 600);
+    }
 }

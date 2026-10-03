@@ -41,6 +41,13 @@ struct BackupExporter {
     description: Option<String>,
     location: Option<String>,
     enabled: bool,
+    /// Backups from before task 17.9 have no role
+    #[serde(default = "default_role")]
+    role: String,
+}
+
+fn default_role() -> String {
+    crate::exporters::DEFAULT_ROLE.to_string()
 }
 
 #[derive(Serialize, Deserialize, FromRow)]
@@ -62,11 +69,12 @@ pub async fn backup_config_handler(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let exporters: Vec<BackupExporter> =
-        sqlx::query_as("SELECT ip_address, name, description, location, enabled FROM exporters")
-            .fetch_all(&state.db)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let exporters: Vec<BackupExporter> = sqlx::query_as(
+        "SELECT ip_address, name, description, location, enabled, role FROM exporters",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let settings: Vec<BackupSetting> =
         sqlx::query_as("SELECT key, value FROM settings ORDER BY key")
@@ -321,13 +329,14 @@ pub async fn restore_config_handler(
                 .unwrap_or(false);
 
         sqlx::query(
-            "INSERT OR REPLACE INTO exporters (ip_address, name, description, location, enabled) VALUES (?, ?, ?, ?, ?)"
+            "INSERT OR REPLACE INTO exporters (ip_address, name, description, location, enabled, role) VALUES (?, ?, ?, ?, ?, ?)"
         )
         .bind(&e.ip_address)
         .bind(&e.name)
         .bind(&e.description)
         .bind(&e.location)
         .bind(e.enabled)
+        .bind(if crate::exporters::valid_role(&e.role) { e.role.as_str() } else { crate::exporters::DEFAULT_ROLE })
         .execute(&state.db)
         .await
         .map_err(|e| err(&format!("Erro ao importar exporter: {}", e)))?;

@@ -4,8 +4,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+
+/// Measurement role of an exporter (task 17.9)
+pub const ROLES: [&str; 3] = ["borda", "bng", "cgnat"];
+pub const DEFAULT_ROLE: &str = "borda";
+
+pub fn valid_role(role: &str) -> bool {
+    ROLES.contains(&role)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Exporter {
@@ -15,6 +24,7 @@ pub struct Exporter {
     pub description: Option<String>,
     pub location: Option<String>,
     pub enabled: bool,
+    pub role: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -26,6 +36,7 @@ pub struct CreateExporterRequest {
     pub description: Option<String>,
     pub location: Option<String>,
     pub enabled: Option<bool>,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +46,7 @@ pub struct UpdateExporterRequest {
     pub description: Option<String>,
     pub location: Option<String>,
     pub enabled: Option<bool>,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +57,7 @@ pub struct ExporterResponse {
     pub description: Option<String>,
     pub location: Option<String>,
     pub enabled: bool,
+    pub role: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -58,6 +71,7 @@ impl From<Exporter> for ExporterResponse {
             description: exporter.description,
             location: exporter.location,
             enabled: exporter.enabled,
+            role: exporter.role,
             created_at: exporter.created_at,
             updated_at: exporter.updated_at,
         }
@@ -83,7 +97,44 @@ pub async fn init_exporters_table(pool: &SqlitePool) -> Result<(), sqlx::Error> 
     .execute(pool)
     .await?;
 
+    // Idempotent migration (task 17.9)
+    let _ = sqlx::query("ALTER TABLE exporters ADD COLUMN role TEXT NOT NULL DEFAULT 'borda'")
+        .execute(pool)
+        .await;
+
     Ok(())
+}
+
+/// Enabled exporter IPs of a role — the device scope of `role=` queries
+pub async fn ips_for_role(pool: &SqlitePool, role: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT ip_address FROM exporters WHERE enabled = 1 AND role = ?")
+        .bind(role)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+}
+
+/// IP → role for every registered exporter (enabled or not: their data is
+/// still in the window)
+pub async fn role_map(pool: &SqlitePool) -> HashMap<String, String> {
+    sqlx::query_as::<_, (String, String)>("SELECT ip_address, role FROM exporters")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// Enabled border exporters — the only ones in the live global totals (task 17.9 R-05)
+pub async fn fetch_border_ips(pool: &SqlitePool) -> Result<Vec<Ipv4Addr>, sqlx::Error> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT ip_address FROM exporters WHERE enabled = 1 AND role = 'borda'")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(ip,)| ip.parse::<Ipv4Addr>().ok())
+        .collect())
 }
 
 // Fetch all enabled exporter IPs for the in-memory whitelist cache
@@ -144,11 +195,15 @@ pub async fn create_exporter_handler(
     }
 
     let enabled = payload.enabled.unwrap_or(true);
+    let role = payload.role.as_deref().unwrap_or(DEFAULT_ROLE);
+    if !valid_role(role) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     let result = sqlx::query(
         r#"
-        INSERT INTO exporters (ip_address, name, description, location, enabled)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO exporters (ip_address, name, description, location, enabled, role)
+        VALUES (?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&payload.ip_address)
@@ -156,6 +211,7 @@ pub async fn create_exporter_handler(
     .bind(&payload.description)
     .bind(&payload.location)
     .bind(enabled)
+    .bind(role)
     .execute(&state.db)
     .await
     .map_err(|e| {
@@ -186,6 +242,12 @@ pub async fn update_exporter_handler(
     // Validate IP if provided
     if let Some(ref ip) = payload.ip_address {
         if ip.parse::<std::net::IpAddr>().is_err() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    if let Some(ref role) = payload.role {
+        if !valid_role(role) {
             return Err(StatusCode::BAD_REQUEST);
         }
     }
@@ -225,6 +287,11 @@ pub async fn update_exporter_handler(
         } else {
             "0".to_string()
         });
+    }
+
+    if let Some(role) = &payload.role {
+        query.push_str(", role = ?");
+        bind_values.push(role.clone());
     }
 
     query.push_str(" WHERE id = ?");

@@ -17,6 +17,8 @@ import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from 
 import { ArrowUpDown } from 'lucide-vue-next'
 import { useSort } from '../composables/useSort'
 import SortTh from '../components/SortTh.vue'
+import DeviceSelect from '../components/DeviceSelect.vue'
+import { applyDevice, deviceRole, DEFAULT_DEVICE, type DeviceValue, type ExporterRole } from '../utils/device'
 import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, loadMirrorFlip, saveMirrorFlip, type FamFilter } from '../lib/chartTheme'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler)
@@ -24,7 +26,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 const authStore = useAuthStore()
 const router = useRouter()
 
-interface Exporter { id: number; ip_address: string; name: string; enabled: boolean }
+interface Exporter { id: number; ip_address: string; name: string; enabled: boolean; role: ExporterRole }
 interface ExporterStat {
   exporter_ip: string; total_bytes: number; flow_count: number; unique_sources: number
   in_bytes: number; out_bytes: number; unknown_bytes: number; direction_mode: string
@@ -50,7 +52,7 @@ interface TimelinePoint { minute: number; total_bytes: number }
 
 const exporters = ref<Exporter[]>([])
 const exporterStats = ref<ExporterStat[]>([])
-const selectedDevice = ref<string | null>(null)
+const selectedDevice = ref<DeviceValue>(DEFAULT_DEVICE)
 const protocolStats = ref({ tcp: 0, udp: 0, icmp: 0, other: 0 })
 const overview = ref<Overview | null>(null)
 const topTalkers = ref<TopTalker[]>([])
@@ -69,7 +71,14 @@ const liveTotalBps = ref(0)
 // exporter. Taxa real, não arrival (task 13.6).
 // Janela global vive no composable — sobrevive à troca de views (task 13.10).
 // O modo por dispositivo é a exceção: buffer local, reinicia ao navegar.
+// O global conta só a borda; BNG/CGNAT somam o per_device das caixas do papel (task 17.9 R-05).
 const { buckets: liveBuckets, subscribe } = useLiveTraffic()
+const globalLive = computed(() => selectedDevice.value === DEFAULT_DEVICE)
+const liveDeviceIps = computed(() => {
+  const role = deviceRole(selectedDevice.value)
+  if (!role) return [selectedDevice.value]
+  return exporters.value.filter((e) => (e.role ?? 'borda') === role).map((e) => e.ip_address)
+})
 const deviceBuckets = new Map<number, LiveBucket>()
 const famFilter = ref<FamFilter>('all')
 const mirrorFlip = ref(loadMirrorFlip())
@@ -147,12 +156,21 @@ const { sorted: sortedExporterStats, sort: exporterSort } = useSort(() => export
   name: (s) => exporterName(s.exporter_ip),
 })
 
-function selectDevice(ip: string | null) {
-  selectedDevice.value = ip
+function selectDevice(value: DeviceValue) {
+  selectedDevice.value = value
   deviceBuckets.clear()
-  if (ip) famFilter.value = 'v4' // slots v4 = par único quando filtrado por device
-  else famFilter.value = 'all'
+  famFilter.value = globalLive.value ? 'all' : 'v4' // slots v4 = par único quando filtrado por device
+  loadOverview()
   loadProtocolStats()
+  loadTopTalkers()
+  loadTopAsns()
+  loadHeatmap()
+}
+
+function statsUrl(path: string, query: Record<string, string> = {}): string {
+  const params = new URLSearchParams(query)
+  applyDevice(params, selectedDevice.value)
+  return `/api/stats/${path}?${params}`
 }
 
 // ── data loading ──
@@ -165,17 +183,14 @@ async function loadExporters() {
 
 async function loadOverview() {
   try {
-    const res = await fetch('/api/stats/overview?minutes=60', { headers: authStore.getAuthHeaders() })
+    const res = await fetch(statsUrl('overview', { minutes: '60' }), { headers: authStore.getAuthHeaders() })
     if (res.ok) overview.value = await res.json()
   } catch {}
 }
 
 async function loadProtocolStats() {
   try {
-    const url = selectedDevice.value
-      ? `/api/stats/protocols?exporter_ip=${encodeURIComponent(selectedDevice.value)}`
-      : '/api/stats/protocols'
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${authStore.token}` } })
+    const res = await fetch(statsUrl('protocols'), { headers: { Authorization: `Bearer ${authStore.token}` } })
     if (res.ok) {
       const stats = await res.json()
       protocolStats.value = stats
@@ -199,14 +214,14 @@ async function loadExporterStats() {
 
 async function loadTopTalkers() {
   try {
-    const res = await fetch('/api/stats/top-talkers?minutes=5&limit=8', { headers: authStore.getAuthHeaders() })
+    const res = await fetch(statsUrl('top-talkers', { minutes: '5', limit: '8' }), { headers: authStore.getAuthHeaders() })
     if (res.ok) topTalkers.value = await res.json()
   } catch {}
 }
 
 async function loadTopAsns() {
   try {
-    const res = await fetch('/api/stats/asn?minutes=60&limit=5&direction=dst', { headers: authStore.getAuthHeaders() })
+    const res = await fetch(statsUrl('asn', { minutes: '60', limit: '5', direction: 'dst' }), { headers: authStore.getAuthHeaders() })
     if (res.ok) topAsns.value = await res.json()
   } catch {}
 }
@@ -230,7 +245,7 @@ async function loadRecentAlerts() {
 // 7-day hour×day heatmap from hourly timeline buckets
 async function loadHeatmap() {
   try {
-    const res = await fetch('/api/stats/timeline?hours=168', { headers: authStore.getAuthHeaders() })
+    const res = await fetch(statsUrl('timeline', { hours: '168' }), { headers: authStore.getAuthHeaders() })
     if (!res.ok) return
     const points: TimelinePoint[] = await res.json()
     const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0))
@@ -271,7 +286,7 @@ function updateChart() {
   const nowSec = Math.floor(Date.now() / 1000) - LIVE_DELAY_SECS
   const first = nowSec - (LIVE_WINDOW_SECS - LIVE_DELAY_SECS)
 
-  const src = selectedDevice.value ? deviceBuckets : liveBuckets
+  const src = globalLive.value ? liveBuckets : deviceBuckets
   pruneBuckets(src)
 
   const mbps = (bytes: number) => (bytes * 8) / 1_000_000
@@ -315,12 +330,16 @@ let pollTimer: any = null
 let overviewTimer: any = null
 
 function onLiveMessage(stats: any) {
-  if (!selectedDevice.value) return
+  if (globalLive.value) return
   // Fatias são globais; por dispositivo o payload é agregado (arrival-based,
   // sem split de família) — slots v4 funcionam como par único in/out
   const sec = stats.timestamp_sec
-  const inB = stats.per_device_in?.[selectedDevice.value] ?? 0
-  const outB = stats.per_device_out?.[selectedDevice.value] ?? 0
+  let inB = 0
+  let outB = 0
+  for (const ip of liveDeviceIps.value) {
+    inB += stats.per_device_in?.[ip] ?? 0
+    outB += stats.per_device_out?.[ip] ?? 0
+  }
   const b = deviceBuckets.get(sec)
   if (b) {
     b.v4i += inB
@@ -371,16 +390,12 @@ onUnmounted(() => {
         </div>
 
         <div class="relative min-w-[220px]">
-          <select
-            :value="selectedDevice"
-            @change="selectDevice(($event.target as HTMLSelectElement).value || null)"
-            class="appearance-none w-full pl-4 pr-10 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 cursor-pointer hover:border-zinc-700 transition-colors"
-          >
-            <option value="">Todos os Dispositivos</option>
-            <option v-for="exp in exporters" :key="exp.id" :value="exp.ip_address">
-              {{ exp.name }} ({{ exp.ip_address }})
-            </option>
-          </select>
+          <DeviceSelect
+            :model-value="selectedDevice"
+            :exporters="exporters"
+            class="w-full"
+            @change="selectDevice"
+          />
           <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-zinc-500">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
           </div>
@@ -538,7 +553,7 @@ onUnmounted(() => {
               </p>
             </div>
             <div class="flex items-center gap-3">
-              <div v-if="!selectedDevice" class="flex rounded-md border border-zinc-800 overflow-hidden text-xs">
+              <div v-if="globalLive" class="flex rounded-md border border-zinc-800 overflow-hidden text-xs">
                 <button
                   v-for="opt in [
                     { v: 'all', label: 'Todos' },

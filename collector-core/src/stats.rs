@@ -43,6 +43,8 @@ async fn ch_query(sql: &str) -> Result<serde_json::Value, StatusCode> {
 #[derive(Debug, Deserialize)]
 pub struct ProtocolStatsQuery {
     pub exporter_ip: Option<String>,
+    /// borda | bng | cgnat — used when exporter_ip is absent (task 17.9)
+    pub role: Option<String>,
     pub minutes: Option<u32>,
 }
 
@@ -55,11 +57,17 @@ pub struct ProtocolStats {
 }
 
 pub async fn get_protocol_stats_handler(
-    State(_state): State<Arc<crate::auth::AppState>>,
+    State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<ProtocolStatsQuery>,
 ) -> Result<Json<ProtocolStats>, StatusCode> {
     let minutes = params.minutes.unwrap_or(5).min(1440);
-    let wc = where_clause(params.exporter_ip.as_deref(), minutes, "MINUTE");
+    let device = device_cond(
+        &state.db,
+        params.exporter_ip.as_deref(),
+        params.role.as_deref(),
+    )
+    .await;
+    let wc = where_clause(&device, minutes, "MINUTE");
 
     let sql = format!(
         "SELECT protocol, sum(bytes) AS total_bytes \
@@ -122,6 +130,8 @@ fn license_gate(
 #[derive(Debug, Deserialize)]
 pub struct TopTalkersQuery {
     pub exporter_ip: Option<String>,
+    /// borda | bng | cgnat — used when exporter_ip is absent (task 17.9)
+    pub role: Option<String>,
     pub minutes: Option<u32>,
     pub limit: Option<u32>,
 }
@@ -148,7 +158,13 @@ pub async fn get_top_talkers_handler(
     let minutes = params.minutes.unwrap_or(5).clamp(1, 1440);
     let requested = params.limit.unwrap_or(20).min(100);
     let (limit, capped) = license_gate(&state, requested)?;
-    let wc = complete_minutes_where(params.exporter_ip.as_deref(), minutes);
+    let device = device_cond(
+        &state.db,
+        params.exporter_ip.as_deref(),
+        params.role.as_deref(),
+    )
+    .await;
+    let wc = complete_minutes_where(&device, minutes);
     let p95 = p95_bps_expr("b", minutes);
 
     // Per-minute sums first so the p95 sees whole buckets; an IP lives in one
@@ -266,6 +282,8 @@ impl From<TopTalkerRowRaw> for TopTalkerRow {
 #[derive(Debug, Deserialize)]
 pub struct AsnQuery {
     pub exporter_ip: Option<String>,
+    /// borda | bng | cgnat — used when exporter_ip is absent (task 17.9)
+    pub role: Option<String>,
     pub minutes: Option<u32>,
     pub limit: Option<u32>,
     pub direction: Option<String>,
@@ -291,7 +309,13 @@ pub async fn get_asn_stats_handler(
     let (limit, _) = license_gate(&state, requested)?;
     let direction = params.direction.as_deref().unwrap_or("both");
 
-    let sql = build_asn_query(params.exporter_ip.as_deref(), minutes, limit, direction);
+    let device = device_cond(
+        &state.db,
+        params.exporter_ip.as_deref(),
+        params.role.as_deref(),
+    )
+    .await;
+    let sql = build_asn_query(&device, minutes, limit, direction);
     let val = ch_query(&sql).await?;
 
     let rows = val["data"]
@@ -328,8 +352,8 @@ fn p95_desc_position(buckets: u32) -> u32 {
     buckets - rank + 1
 }
 
-fn build_asn_query(exporter_ip: Option<&str>, minutes: u32, limit: u32, direction: &str) -> String {
-    let filter = complete_minutes_where(exporter_ip, minutes);
+fn build_asn_query(device: &str, minutes: u32, limit: u32, direction: &str) -> String {
+    let filter = complete_minutes_where(device, minutes);
     let side = |table: &str, col: &str| {
         format!(
             "SELECT {col} AS asn, toStartOfMinute(timestamp) AS minute, bytes, packets \
@@ -377,6 +401,8 @@ mod asn_tests {
 #[derive(Debug, Deserialize)]
 pub struct PortBreakdownQuery {
     pub exporter_ip: Option<String>,
+    /// borda | bng | cgnat — used when exporter_ip is absent (task 17.9)
+    pub role: Option<String>,
     pub minutes: Option<u32>,
     pub limit: Option<u32>,
 }
@@ -440,7 +466,13 @@ pub async fn get_port_breakdown_handler(
     let minutes = params.minutes.unwrap_or(5).clamp(1, 1440);
     let requested = params.limit.unwrap_or(20).min(100);
     let (limit, _) = license_gate(&state, requested)?;
-    let wc = complete_minutes_where(params.exporter_ip.as_deref(), minutes);
+    let device = device_cond(
+        &state.db,
+        params.exporter_ip.as_deref(),
+        params.role.as_deref(),
+    )
+    .await;
+    let wc = complete_minutes_where(&device, minutes);
     let p95 = p95_bps_expr("b", minutes);
 
     let side = |table: &str| {
@@ -497,6 +529,8 @@ pub async fn get_port_breakdown_handler(
 #[derive(Debug, Deserialize)]
 pub struct TimelineQuery {
     pub exporter_ip: Option<String>,
+    /// borda | bng | cgnat — used when exporter_ip is absent (task 17.9)
+    pub role: Option<String>,
     pub hours: Option<u32>,
 }
 
@@ -527,7 +561,7 @@ pub struct TimelinePoint {
 }
 
 pub async fn get_timeline_handler(
-    State(_state): State<Arc<crate::auth::AppState>>,
+    State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<TimelineQuery>,
 ) -> Result<Json<Vec<TimelinePoint>>, StatusCode> {
     // up to 7 days — the dashboard heatmap aggregates 168h client-side
@@ -538,7 +572,13 @@ pub async fn get_timeline_handler(
     } else {
         "toStartOfMinute"
     };
-    let wc = where_clause(params.exporter_ip.as_deref(), hours, "HOUR");
+    let device = device_cond(
+        &state.db,
+        params.exporter_ip.as_deref(),
+        params.role.as_deref(),
+    )
+    .await;
+    let wc = where_clause(&device, hours, "HOUR");
 
     // Single pass per table: sumIf splits by direction without extra scans
     let dir_cols = "sumIf(bytes, direction = 0) AS in_bytes, \
@@ -625,10 +665,12 @@ pub struct ExporterSummaryRow {
     pub unknown_bytes: u64,
     /// "in+out" | "in" | "out" | "none" — whether the exporter reports IE 61
     pub direction_mode: String,
+    /// borda | bng | cgnat (task 17.9)
+    pub role: String,
 }
 
 pub async fn get_exporter_summary_handler(
-    State(_state): State<Arc<crate::auth::AppState>>,
+    State(state): State<Arc<crate::auth::AppState>>,
     Query(params): Query<ExporterSummaryQuery>,
 ) -> Result<Json<Vec<ExporterSummaryRow>>, StatusCode> {
     let minutes = params.minutes.unwrap_or(5).min(1440);
@@ -669,6 +711,7 @@ pub async fn get_exporter_summary_handler(
             out_bytes: 0,
             unknown_bytes: 0,
             direction_mode: String::new(),
+            role: String::new(),
         });
         e.total_bytes += bytes;
         e.flow_count += flows;
@@ -678,8 +721,13 @@ pub async fn get_exporter_summary_handler(
         e.unknown_bytes += unk_b;
     }
 
+    let roles = crate::exporters::role_map(&state.db).await;
     let mut rows: Vec<ExporterSummaryRow> = merged.into_values().collect();
     for r in rows.iter_mut() {
+        r.role = roles
+            .get(&r.exporter_ip)
+            .cloned()
+            .unwrap_or_else(|| crate::exporters::DEFAULT_ROLE.to_string());
         r.direction_mode = match (r.in_bytes > 0, r.out_bytes > 0) {
             (true, true) => "in+out",
             (true, false) => "in",
@@ -697,6 +745,9 @@ pub async fn get_exporter_summary_handler(
 #[derive(Debug, Deserialize)]
 pub struct OverviewQuery {
     pub minutes: Option<u32>,
+    pub exporter_ip: Option<String>,
+    /// borda | bng | cgnat — used when exporter_ip is absent (task 17.9)
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -749,18 +800,25 @@ pub async fn get_overview_handler(
     let minutes = params.minutes.unwrap_or(60).clamp(1, 1440);
     let mut ov = Overview::default();
 
+    let device = device_cond(
+        &state.db,
+        params.exporter_ip.as_deref(),
+        params.role.as_deref(),
+    )
+    .await;
+
     // ── 1-minute buckets over the window (both tables, merged in Rust) ──
     // A coluna literal `fam` permite o share v6 sem uma segunda varredura
     let bucket_sql = format!(
         "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, 4 AS fam, \
                 sum(bytes) AS b, sum(packets) AS p, sum(flow_count) AS f, \
                 sumIf(bytes, direction = 1) AS out_b \
-         FROM network_flows_v4 WHERE timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
+         FROM network_flows_v4 WHERE {device} AND timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
          UNION ALL \
          SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, 6 AS fam, \
                 sum(bytes) AS b, sum(packets) AS p, sum(flow_count) AS f, \
                 sumIf(bytes, direction = 1) AS out_b \
-         FROM network_flows_v6 WHERE timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
+         FROM network_flows_v6 WHERE {device} AND timestamp >= now() - INTERVAL {minutes} MINUTE GROUP BY minute \
          FORMAT JSON"
     );
     let val = ch_query(&bucket_sql).await?;
@@ -864,13 +922,16 @@ pub async fn get_overview_handler(
     }
 
     // ── active talkers / exporters (last 5 min) ──
-    let act_sql = "SELECT uniq(src_ip) AS talkers, uniq(exporter_ip) AS exps \
+    // Talkers follow the device scope; active exporters stay global
+    let act_sql = format!(
+        "SELECT uniqIf(src_ip, {device}) AS talkers, uniq(exporter_ip) AS exps \
          FROM network_flows_v4 WHERE timestamp >= now() - INTERVAL 5 MINUTE \
          UNION ALL \
-         SELECT uniq(src_ip) AS talkers, uniq(exporter_ip) AS exps \
+         SELECT uniqIf(src_ip, {device}) AS talkers, uniq(exporter_ip) AS exps \
          FROM network_flows_v6 WHERE timestamp >= now() - INTERVAL 5 MINUTE \
-         FORMAT JSON";
-    if let Ok(val) = ch_query(act_sql).await {
+         FORMAT JSON"
+    );
+    if let Ok(val) = ch_query(&act_sql).await {
         for row in val["data"].as_array().cloned().unwrap_or_default() {
             ov.active_talkers += parse_u64_field(&row["talkers"]);
             ov.active_exporters = ov.active_exporters.max(parse_u64_field(&row["exps"]));
@@ -878,17 +939,19 @@ pub async fn get_overview_handler(
     }
 
     // ── 24h volume + top protocol (single scan) ──
-    let day_sql = "SELECT sum(bytes) AS b, \
+    let day_sql = format!(
+        "SELECT sum(bytes) AS b, \
                 sumIf(bytes, protocol = 6) AS tcp, sumIf(bytes, protocol = 17) AS udp, \
                 sumIf(bytes, protocol = 1) AS icmp \
-         FROM network_flows_v4 WHERE timestamp >= now() - INTERVAL 24 HOUR \
+         FROM network_flows_v4 WHERE {device} AND timestamp >= now() - INTERVAL 24 HOUR \
          UNION ALL \
          SELECT sum(bytes) AS b, \
                 sumIf(bytes, protocol = 6) AS tcp, sumIf(bytes, protocol = 17) AS udp, \
                 sumIf(bytes, protocol = 1) AS icmp \
-         FROM network_flows_v6 WHERE timestamp >= now() - INTERVAL 24 HOUR \
-         FORMAT JSON";
-    if let Ok(val) = ch_query(day_sql).await {
+         FROM network_flows_v6 WHERE {device} AND timestamp >= now() - INTERVAL 24 HOUR \
+         FORMAT JSON"
+    );
+    if let Ok(val) = ch_query(&day_sql).await {
         let (mut tcp, mut udp, mut icmp) = (0u64, 0u64, 0u64);
         for row in val["data"].as_array().cloned().unwrap_or_default() {
             ov.total_bytes_24h += parse_u64_field(&row["b"]);
@@ -968,6 +1031,8 @@ pub struct TalkerQuery {
     pub ip: String,
     pub minutes: Option<u32>,
     pub exporter_ip: Option<String>,
+    /// borda | bng | cgnat — used when exporter_ip is absent (task 17.9)
+    pub role: Option<String>,
     /// all | internet | internal — filters by the peer's class (task 17.7)
     pub scope: Option<String>,
 }
@@ -1005,10 +1070,20 @@ pub struct TalkerPort {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RoleVolume {
+    pub role: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TalkerDetail {
     pub ip: String,
     pub ip_class: &'static str,
     pub scope: &'static str,
+    /// Role whose exporters were used (task 17.9 R-04)
+    pub role: String,
+    /// Every role the IP shows up in, with its volume in the window
+    pub seen_on: Vec<RoleVolume>,
     pub bucket_secs: u64,
     pub from: u64,
     pub to: u64,
@@ -1046,10 +1121,58 @@ pub async fn get_talker_handler(
     // the translation when the exporter is the NAT device
     let is_up = format!("(src_ip = {x} OR nat_src_ip = {x})");
     let is_down = format!("(dst_ip = {x} OR nat_dst_ip = {x})");
-    let device = match safe_ip(params.exporter_ip.as_deref()) {
-        Some(e) => format!("exporter_ip = '{e}' AND "),
-        None => String::new(),
+    let roles = crate::exporters::role_map(&state.db).await;
+    let role_of = |exporter: &str| {
+        roles
+            .get(exporter)
+            .cloned()
+            .unwrap_or_else(|| crate::exporters::DEFAULT_ROLE.to_string())
     };
+
+    // Where the IP shows up, per role — never summed across roles (R-03/R-04)
+    let seen_sql = format!(
+        "SELECT toString(exporter_ip) AS exporter, sum(bytes) AS b FROM {table} \
+         WHERE timestamp >= now() - INTERVAL {minutes} MINUTE \
+           AND (src_ip = {x} OR dst_ip = {x} OR nat_src_ip = {x} OR nat_dst_ip = {x}) \
+         GROUP BY exporter FORMAT JSON"
+    );
+    let mut per_role: HashMap<String, u64> = HashMap::new();
+    for r in ch_query(&seen_sql).await?["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        *per_role
+            .entry(role_of(r["exporter"].as_str().unwrap_or_default()))
+            .or_default() += parse_u64_field(&r["b"]);
+    }
+    let mut seen_on: Vec<RoleVolume> = per_role
+        .into_iter()
+        .map(|(role, bytes)| RoleVolume { role, bytes })
+        .collect();
+    // Ties go to the border view, then BNG, then CGNAT
+    let rank = |r: &str| {
+        crate::exporters::ROLES
+            .iter()
+            .position(|x| *x == r)
+            .unwrap_or(usize::MAX)
+    };
+    seen_on.sort_by(|a, b| {
+        b.bytes
+            .cmp(&a.bytes)
+            .then(rank(&a.role).cmp(&rank(&b.role)))
+    });
+
+    let exporter = safe_ip(params.exporter_ip.as_deref());
+    let role = match (exporter, params.role.as_deref()) {
+        (Some(e), _) => role_of(e),
+        (None, Some(r)) if crate::exporters::valid_role(r) => r.to_string(),
+        _ => seen_on
+            .first()
+            .map(|v| v.role.clone())
+            .unwrap_or_else(|| crate::exporters::DEFAULT_ROLE.to_string()),
+    };
+    let device = device_cond(&state.db, exporter, Some(&role)).await;
     let classifier = crate::netclass::NetClassifier::load(&state.db).await;
     let peer_ip = format!("if({is_up}, if(nat_dst_ip != {zero}, nat_dst_ip, dst_ip), src_ip)");
     let peer_asn = format!("if({is_up}, dst_asn, src_asn)");
@@ -1064,7 +1187,7 @@ pub async fn get_talker_handler(
         _ => ("all", String::new()),
     };
     let filter = format!(
-        "FROM {table} WHERE {device}timestamp >= now() - INTERVAL {minutes} MINUTE \
+        "FROM {table} WHERE {device} AND timestamp >= now() - INTERVAL {minutes} MINUTE \
          AND ({is_up} OR {is_down}){scope_cond}"
     );
     let up = format!("sumIf(bytes, {is_up}) AS up_bytes");
@@ -1158,6 +1281,8 @@ pub async fn get_talker_handler(
         ip: ip.to_string(),
         ip_class: classifier.classify(ip, self_asn as u32),
         scope,
+        role,
+        seen_on,
         bucket_secs,
         from: to - minutes as u64 * 60,
         to,
@@ -1202,15 +1327,40 @@ fn safe_ip(ip: Option<&str>) -> Option<&str> {
 
 /// Last `minutes` complete minutes (task 17.2 R-03): the open minute would
 /// drag rates down
-fn complete_minutes_where(exporter_ip: Option<&str>, minutes: u32) -> String {
-    let device = match safe_ip(exporter_ip) {
-        Some(ip) => format!("exporter_ip = '{ip}' AND "),
-        None => String::new(),
-    };
+fn complete_minutes_where(device: &str, minutes: u32) -> String {
     format!(
-        "WHERE {device}timestamp >= toStartOfMinute(now()) - INTERVAL {minutes} MINUTE \
+        "WHERE {device} AND timestamp >= toStartOfMinute(now()) - INTERVAL {minutes} MINUTE \
          AND timestamp < toStartOfMinute(now())"
     )
+}
+
+/// Device scope as a SQL condition (task 17.9 R-02): one exporter, or every
+/// enabled exporter of a role; border by default. Never sums across roles.
+async fn device_cond(
+    db: &sqlx::SqlitePool,
+    exporter_ip: Option<&str>,
+    role: Option<&str>,
+) -> String {
+    if let Some(ip) = safe_ip(exporter_ip) {
+        return format!("exporter_ip = '{ip}'");
+    }
+    let role = role
+        .filter(|r| crate::exporters::valid_role(r))
+        .unwrap_or(crate::exporters::DEFAULT_ROLE);
+    exporters_in(&crate::exporters::ips_for_role(db, role).await)
+}
+
+fn exporters_in(ips: &[String]) -> String {
+    let list: Vec<String> = ips
+        .iter()
+        .filter_map(|ip| ip.parse::<std::net::IpAddr>().ok())
+        .map(|ip| format!("'{ip}'"))
+        .collect();
+    if list.is_empty() {
+        "0".to_string()
+    } else {
+        format!("exporter_ip IN ({})", list.join(", "))
+    }
 }
 
 /// Nearest-rank p95 (bps) over `minutes` zero-filled buckets, given a column
@@ -1224,14 +1374,8 @@ fn avg_bps(bytes: u64, minutes: u32) -> u64 {
     bytes * 8 / (minutes as u64 * 60)
 }
 
-fn where_clause(exporter_ip: Option<&str>, window: u32, unit: &str) -> String {
-    match safe_ip(exporter_ip) {
-        Some(ip) => format!(
-            "WHERE exporter_ip = '{}' AND timestamp >= now() - INTERVAL {} {}",
-            ip, window, unit
-        ),
-        None => format!("WHERE timestamp >= now() - INTERVAL {} {}", window, unit),
-    }
+fn where_clause(device: &str, window: u32, unit: &str) -> String {
+    format!("WHERE {device} AND timestamp >= now() - INTERVAL {window} {unit}")
 }
 
 fn parse_u64_field(v: &serde_json::Value) -> u64 {
