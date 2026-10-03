@@ -123,14 +123,14 @@ Top source IPs by byte volume.
 ---
 
 ### GET /api/stats/asn  ← NEW (task 2.2)
-ASN traffic breakdown.
+ASN traffic ranked by p95 rate over the window (1-minute buckets, zero-filled; see task 2.2).
 
 **Query params:** `exporter_ip?`, `minutes?` (default 60), `limit?` (default 20), `direction?` (src|dst|both, default both)
 
 **Response 200:**
 ```json
 [
-  { "asn": 15169, "label": "AS15169", "total_bytes": 209715200, "total_packets": 150000 },
+  { "asn": 15169, "label": "AS15169", "p95_bps": 48210000, "avg_bps": 31000000, "total_bytes": 209715200, "total_packets": 150000 },
   ...
 ]
 ```

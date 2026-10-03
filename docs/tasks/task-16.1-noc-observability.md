@@ -13,5 +13,5 @@ Quatro adições pedidas pelo Marcio (01/08/2026):
   no overview; no tile Exporters, vermelho acima de 1%.
 - **Sparkline de alertas 24h**: 24 barras por hora (SQLite `alert_events`) no
   tile Alertas.
-- **Top ASNs de destino**: card no NOC com top 5 por bytes (60 min,
+- **Top ASNs de destino**: card no NOC com top 5 por taxa p95 em bps (60 min, ver task 2.2;
   `direction=dst`) e barras proporcionais — visão de peering; clica → ASN Traffic.

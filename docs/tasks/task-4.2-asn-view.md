@@ -7,7 +7,7 @@
 
 ## Spec
 
-New route `/asn-traffic`. Shows traffic volume grouped by ASN.
+New route `/asn-traffic`. Shows the p95 rate (bps) of each ASN over the window (see task 2.2 for the definition).
 Useful for detecting which autonomous systems are generating or receiving the most traffic.
 
 ## Layout
@@ -20,10 +20,10 @@ Useful for detecting which autonomous systems are generating or receiving the mo
 │  [Doughnut chart — top 8 ASNs + "Other" slice]              │
 │                                                              │
 ├────────┬──────────────────┬─────────────┬───────────────────-┤
-│  ASN   │  Label           │  Traffic    │  Packets           │
+│  ASN   │  Label           │  P95        │  Média             │
 ├────────┼──────────────────┼─────────────┼────────────────────┤
-│  15169 │  AS15169         │  200 MB     │  150,000           │
-│  0     │  Unknown         │    5 MB     │    3,000           │
+│  15169 │  AS15169         │  48.2 Mbps  │  31.0 Mbps         │
+│  0     │  Unknown         │   1.2 Mbps  │  0.4 Mbps          │
 └────────┴──────────────────┴─────────────┴────────────────────┘
 ```
 
@@ -36,7 +36,7 @@ Useful for detecting which autonomous systems are generating or receiving the mo
 ## Doughnut Chart
 
 Reuse the same `Doughnut` component from `vue-chartjs` already present in Dashboard.
-Show top 8 ASNs; aggregate the rest as "Other".
+Slices are `p95_bps`. Show top 8 ASNs; aggregate the rest as "Other" (sum of their p95 — a visual share, not a billable rate). Tooltip formats as bps.
 Use the same color palette as the existing protocol doughnut (emerald, blue, amber, red, +4 more).
 
 ```typescript
@@ -66,7 +66,7 @@ Show a card with text: "Sem dados de ASN disponíveis. Verifique se o equipament
 ## Acceptance Criteria
 
 - Doughnut chart renders with correct color slices
-- Table shows all API rows sorted by traffic desc
+- Table shows all API rows sorted by p95 desc, rates formatted as bps/kbps/Mbps/Gbps
 - Direction selector changes API call
 - Auto-refresh every 60s (ASN data changes slowly)
 - Empty state rendered correctly
