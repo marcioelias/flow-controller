@@ -736,7 +736,7 @@ pub async fn get_exporter_summary_handler(
         }
         .to_string();
     }
-    rows.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.total_bytes));
     Ok(Json(rows))
 }
 
@@ -993,19 +993,19 @@ pub async fn get_overview_handler(
 
     // ── sampled exporters (from the Prometheus gauge) ──
     for family in state.metrics.registry.gather() {
-        if family.get_name() != "exporter_sampling_rate" {
+        if family.name() != "exporter_sampling_rate" {
             continue;
         }
         for metric in family.get_metric() {
-            let rate = metric.get_gauge().get_value() as u32;
+            let rate = metric.get_gauge().value() as u32;
             if rate <= 1 {
                 continue;
             }
             let ip = metric
                 .get_label()
                 .iter()
-                .find(|l| l.get_name() == "exporter_ip")
-                .map(|l| l.get_value().to_string())
+                .find(|l| l.name() == "exporter_ip")
+                .map(|l| l.value().to_string())
                 .unwrap_or_default();
             ov.sampling_exporters.push(SamplingExporter {
                 exporter_ip: ip,

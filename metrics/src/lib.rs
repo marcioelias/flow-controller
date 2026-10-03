@@ -195,7 +195,7 @@ impl CollectorMetrics {
         self.exporter_telemetry_lag
             .collect()
             .iter()
-            .flat_map(|mf| mf.get_metric().iter().map(|m| m.get_gauge().get_value()))
+            .flat_map(|mf| mf.get_metric().iter().map(|m| m.get_gauge().value()))
             .fold(0.0, f64::max)
     }
 
@@ -204,11 +204,7 @@ impl CollectorMetrics {
         self.template_cache_size
             .collect()
             .iter()
-            .flat_map(|mf| {
-                mf.get_metric()
-                    .iter()
-                    .map(|m| m.get_gauge().get_value() as i64)
-            })
+            .flat_map(|mf| mf.get_metric().iter().map(|m| m.get_gauge().value() as i64))
             .sum()
     }
 }

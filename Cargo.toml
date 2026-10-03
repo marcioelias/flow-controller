@@ -29,7 +29,7 @@ nom = "7.1"
 byteorder = "1.5"
 
 # Metrics
-prometheus = "0.13"
+prometheus = "0.14"
 
 # Cryptography / licensing
 base64 = "0.22"

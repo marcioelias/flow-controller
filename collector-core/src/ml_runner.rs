@@ -143,17 +143,17 @@ impl Tuning {
 fn sampling_rates(state: &AppState) -> HashMap<String, f64> {
     let mut rates = HashMap::new();
     for family in state.metrics.registry.gather() {
-        if family.get_name() != "exporter_sampling_rate" {
+        if family.name() != "exporter_sampling_rate" {
             continue;
         }
         for metric in family.get_metric() {
             let ip = metric
                 .get_label()
                 .iter()
-                .find(|l| l.get_name() == "exporter_ip")
-                .map(|l| l.get_value().to_string())
+                .find(|l| l.name() == "exporter_ip")
+                .map(|l| l.value().to_string())
                 .unwrap_or_default();
-            let rate = metric.get_gauge().get_value().max(1.0);
+            let rate = metric.get_gauge().value().max(1.0);
             let e = rates.entry(ip).or_insert(1.0);
             if rate > *e {
                 *e = rate;

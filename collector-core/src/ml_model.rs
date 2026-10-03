@@ -39,6 +39,9 @@ enum ITree {
     },
 }
 
+// Euler–Mascheroni written out: `f64::consts::EULER_GAMMA` is newer than the
+// toolchains this builds on
+#[allow(clippy::approx_constant)]
 fn c(n: usize) -> f64 {
     if n <= 1 {
         return 0.0;
