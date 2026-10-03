@@ -33,6 +33,8 @@ export interface AlertEvent {
 
 export interface AlertEventDetail extends AlertEvent {
   explanation: string | null
+  explanation_status: 'done' | 'failed' | 'pending' | 'disabled'
+  explanation_error: string | null
   feedback: string | null
   exporter_name: string | null
   rule: { id: number; name: string; rule_type: string; params: Record<string, unknown> } | null
@@ -142,6 +144,10 @@ export const useAlertsStore = defineStore('alerts', () => {
     return resp
   }
 
+  async function retryExplanation(id: number) {
+    await apiCall<void>('POST', `/api/alerts/events/${id}/explain`)
+  }
+
   async function getEvent(id: number) {
     return apiCall<AlertEventDetail>('GET', `/api/alerts/events/${id}`)
   }
@@ -169,7 +175,7 @@ export const useAlertsStore = defineStore('alerts', () => {
   return {
     rules, events, eventsTotal, telegram, loading, error,
     loadRules, createRule, updateRule, deleteRule, toggleRule,
-    loadEvents, getEvent, clearEvents,
+    loadEvents, getEvent, retryExplanation, clearEvents,
     loadTelegram, saveTelegram, testTelegram,
   }
 })

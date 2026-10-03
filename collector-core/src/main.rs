@@ -606,20 +606,8 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn LLM explainer (optional — only when LLM_ENABLED=true in settings or env)
-    {
-        let llm_pool = auth_db.clone();
-        rt.spawn(async move {
-            if let Some(llm_client) = llm::LlmClient::from_settings(&llm_pool).await {
-                tracing::info!(
-                    "LLM explainer: using model '{}' at {}",
-                    llm_client.model_name(),
-                    "configured endpoint"
-                );
-                llm::run_llm_explainer(llm_pool, llm_client).await;
-            }
-        });
-    }
+    // LLM explainer: always running, idles while LLM_ENABLED is off (task 17.5)
+    rt.spawn(llm::run_llm_explainer(auth_db.clone()));
 
     // Reannounce all active BGP routes at startup
     {
@@ -738,6 +726,10 @@ fn main() -> anyhow::Result<()> {
                 get(alert_api::list_events).delete(alert_api::clear_events),
             )
             .route("/api/alerts/events/:id", get(alert_api::get_event))
+            .route(
+                "/api/alerts/events/:id/explain",
+                post(alert_api::retry_explanation),
+            )
             .route(
                 "/api/alerts/telegram",
                 get(alert_api::get_telegram).put(alert_api::update_telegram),

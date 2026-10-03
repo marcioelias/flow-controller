@@ -2,9 +2,37 @@ use crate::alerts::AlertEvent;
 use sqlx::Row;
 
 const MAX_TOKENS: u32 = 120;
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+// Local models on CPU can take well over 30 s on the first load (task 17.5 R-02)
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const BATCH_SIZE: i64 = 5;
+/// After this many failures an event leaves the queue (task 17.5 R-03)
+pub const MAX_ATTEMPTS: i64 = 3;
+
+/// LLM_ENABLED / LLM_MODEL as seen by the explainer: settings first, env fallback
+pub async fn llm_settings(pool: &sqlx::SqlitePool) -> (bool, String) {
+    let enabled = crate::settings::get_value(pool, "LLM_ENABLED")
+        .await
+        .unwrap_or_else(|| std::env::var("LLM_ENABLED").unwrap_or_default())
+        == "true";
+    let model = crate::settings::get_value(pool, "LLM_MODEL")
+        .await
+        .unwrap_or_else(|| std::env::var("LLM_MODEL").unwrap_or_else(|_| "qwen2.5:3b".into()));
+    (enabled, model)
+}
+
+/// Per-event explanation state shown in the UI (task 17.5 R-04)
+pub fn explanation_status(has_text: bool, attempts: i64, llm_enabled: bool) -> &'static str {
+    if has_text {
+        "done"
+    } else if attempts >= MAX_ATTEMPTS {
+        "failed"
+    } else if llm_enabled {
+        "pending"
+    } else {
+        "disabled"
+    }
+}
 
 pub struct LlmClient {
     language: String,
@@ -75,10 +103,6 @@ impl LlmClient {
         })
     }
 
-    pub fn model_name(&self) -> &str {
-        &self.model
-    }
-
     async fn generate(&self, prompt: &str) -> anyhow::Result<String> {
         let body = serde_json::json!({
             "model":   self.model,
@@ -103,8 +127,12 @@ impl LlmClient {
             .ok_or_else(|| anyhow::anyhow!("no 'response' field in LLM output"))
     }
 
-    pub async fn explain(&self, event: &AlertEvent) -> anyhow::Result<String> {
-        let prompt = build_prompt(event, &self.language);
+    pub async fn explain(
+        &self,
+        event: &AlertEvent,
+        window_min: Option<i64>,
+    ) -> anyhow::Result<String> {
+        let prompt = build_prompt(event, window_min, &self.language);
         self.generate(&prompt).await
     }
 }
@@ -120,15 +148,20 @@ fn language_name(tag: &str) -> &str {
     }
 }
 
-fn build_prompt(ev: &AlertEvent, language: &str) -> String {
+fn build_prompt(ev: &AlertEvent, window_min: Option<i64>, language: &str) -> String {
+    // Bytes are summed over the rule's short window, not per second
+    let window_secs = window_min.unwrap_or(10).max(1) as f64 * 60.0;
+    let mbps = |b: Option<i64>| b.unwrap_or(0) as f64 * 8.0 / window_secs / 1_000_000.0;
     let ctx = match ev.alert_type.as_str() {
         "upload_inversion" => format!(
-            "alert_type=upload_inversion src_ip={} upload={:.1}Mbps download={:.1}Mbps. \
+            "alert_type=upload_inversion src_ip={} upload={:.1}Mbps download={:.1}Mbps \
+             (average over the last {:.0} min). \
              The subscriber historically downloads far more than it uploads. \
              Current window shows upload exceeding download significantly.",
             ev.src_ip,
-            ev.upload_bytes.unwrap_or(0) as f64 / 125_000.0,
-            ev.download_bytes.unwrap_or(0) as f64 / 125_000.0,
+            mbps(ev.upload_bytes),
+            mbps(ev.download_bytes),
+            window_secs / 60.0,
         ),
         "attack_signature" => format!(
             "alert_type=attack_signature src_ip={} pps={:.0} avg_pkt_bytes={:.0} ports=[{}]. \
@@ -177,21 +210,42 @@ fn build_prompt(ev: &AlertEvent, language: &str) -> String {
 }
 
 /// Background task: polls for alert_events without explanation and fills them in.
-pub async fn run_llm_explainer(pool: sqlx::SqlitePool, client: LlmClient) {
-    tracing::info!("LLM explainer started (model={})", client.model_name());
+/// Always running; LLM settings are re-read every cycle so enabling the AI or
+/// changing endpoint/model in the UI takes effect without a restart (task 17.5 R-01).
+pub async fn run_llm_explainer(pool: sqlx::SqlitePool) {
+    let mut active: Option<(String, String)> = None;
 
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
 
+        let Some(client) = LlmClient::from_settings(&pool).await else {
+            if active.take().is_some() {
+                tracing::info!("LLM explainer: disabled");
+            }
+            continue;
+        };
+        let config = (client.endpoint.clone(), client.model.clone());
+        if active.as_ref() != Some(&config) {
+            tracing::info!(
+                "LLM explainer: using model '{}' at {}",
+                client.model,
+                client.endpoint
+            );
+            active = Some(config);
+        }
+
         let rows = match sqlx::query(
-            "SELECT id, rule_id, exporter_ip, src_ip, alert_type, severity, message,
-                    upload_bytes, download_bytes, pps, avg_pkt_bytes, attack_ports,
-                    notified, bgp_announced, created_at
-             FROM alert_events
-             WHERE (explanation IS NULL OR explanation = '')
-             ORDER BY id DESC
+            "SELECT e.id, e.rule_id, e.exporter_ip, e.src_ip, e.alert_type, e.severity, e.message,
+                    e.upload_bytes, e.download_bytes, e.pps, e.avg_pkt_bytes, e.attack_ports,
+                    e.notified, e.bgp_announced, e.created_at,
+                    json_extract(r.params, '$.short_window_min') AS window_min
+             FROM alert_events e LEFT JOIN alert_rules r ON r.id = e.rule_id
+             WHERE (e.explanation IS NULL OR e.explanation = '')
+               AND e.explanation_attempts < ?
+             ORDER BY e.id DESC
              LIMIT ?",
         )
+        .bind(MAX_ATTEMPTS)
         .bind(BATCH_SIZE)
         .fetch_all(&pool)
         .await
@@ -216,17 +270,37 @@ pub async fn run_llm_explainer(pool: sqlx::SqlitePool, client: LlmClient) {
                 Some(id) => id,
                 None => continue,
             };
+            let window_min: Option<i64> = row.try_get("window_min").ok().flatten();
 
-            match client.explain(&event).await {
-                Ok(text) => {
-                    let _ = sqlx::query("UPDATE alert_events SET explanation = ? WHERE id = ?")
-                        .bind(&text)
-                        .bind(event_id)
-                        .execute(&pool)
-                        .await;
+            match client.explain(&event, window_min).await {
+                Ok(text) if !text.is_empty() => {
+                    let _ = sqlx::query(
+                        "UPDATE alert_events SET explanation = ?, explanation_error = NULL
+                         WHERE id = ?",
+                    )
+                    .bind(&text)
+                    .bind(event_id)
+                    .execute(&pool)
+                    .await;
                     tracing::debug!("LLM explained alert #{event_id}");
                 }
-                Err(e) => tracing::warn!("LLM explain failed for alert #{event_id}: {e}"),
+                result => {
+                    let err = match result {
+                        Err(e) => e.to_string(),
+                        Ok(_) => "empty response from the model".to_string(),
+                    };
+                    tracing::warn!("LLM explain failed for alert #{event_id}: {err}");
+                    let _ = sqlx::query(
+                        "UPDATE alert_events
+                         SET explanation_attempts = explanation_attempts + 1,
+                             explanation_error = ?
+                         WHERE id = ?",
+                    )
+                    .bind(err.chars().take(300).collect::<String>())
+                    .bind(event_id)
+                    .execute(&pool)
+                    .await;
+                }
             }
 
             // Respect ~1 req/s to avoid overloading Ollama

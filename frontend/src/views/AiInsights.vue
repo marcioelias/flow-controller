@@ -3,9 +3,10 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAiStore } from '../stores/ai'
 import { useAuthStore } from '../stores/auth'
-import { Brain, RefreshCw, AlertTriangle, CheckCircle2, Loader2, X, ThumbsDown, ShieldAlert } from 'lucide-vue-next'
+import { Brain, RefreshCw, AlertTriangle, CheckCircle2, X, ThumbsDown, ShieldAlert } from 'lucide-vue-next'
 import { useSort, type SortState } from '../composables/useSort'
 import SortTh from '../components/SortTh.vue'
+import ExplanationState from '../components/ExplanationState.vue'
 
 const store = useAiStore()
 const page = ref(0)
@@ -291,13 +292,14 @@ function formatPps(pps: number): string {
                 {{ ev.pps != null ? formatPps(ev.pps) : '—' }}
               </td>
               <td class="px-4 py-2.5 text-xs max-w-xs">
-                <div v-if="ev.explanation" class="text-zinc-300 line-clamp-2" :title="ev.explanation">
-                  {{ ev.explanation }}
-                </div>
-                <div v-else class="flex items-center gap-1.5 text-zinc-600 italic">
-                  <Loader2 class="w-3 h-3 animate-spin" />
-                  gerando...
-                </div>
+                <ExplanationState
+                  compact
+                  :event-id="ev.id"
+                  :explanation="ev.explanation"
+                  :status="ev.explanation_status"
+                  :error="ev.explanation_error"
+                  @retried="store.loadEvents(page, perPage)"
+                />
               </td>
             </tr>
           </tbody>
@@ -371,8 +373,13 @@ function formatPps(pps: number): string {
 
             <div>
               <p class="text-xs text-zinc-500 mb-1">Explicação IA</p>
-              <p v-if="selected.explanation" class="text-zinc-300 leading-relaxed">{{ selected.explanation }}</p>
-              <p v-else class="text-zinc-600 italic flex items-center gap-1.5"><Loader2 class="w-3 h-3 animate-spin" /> gerando…</p>
+              <ExplanationState
+                :event-id="selected.id"
+                :explanation="selected.explanation"
+                :status="selected.explanation_status"
+                :error="selected.explanation_error"
+                @retried="selected.explanation_status = 'pending'; store.loadEvents(page, perPage)"
+              />
             </div>
           </div>
 

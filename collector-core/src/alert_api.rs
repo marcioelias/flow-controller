@@ -274,6 +274,9 @@ pub struct EventDetail {
     pub event: AlertEvent,
     pub window_min: Option<i64>,
     pub explanation: Option<String>,
+    /// done | failed | pending | disabled (task 17.5 R-04)
+    pub explanation_status: &'static str,
+    pub explanation_error: Option<String>,
     pub feedback: Option<String>,
     pub exporter_name: Option<String>,
     pub rule: Option<EventRule>,
@@ -383,6 +386,7 @@ pub async fn get_event(
 ) -> Result<Json<EventDetail>, StatusCode> {
     let row = sqlx::query(&format!(
         "SELECT {EVENT_COLUMNS}, e.explanation, e.feedback,
+                e.explanation_attempts, e.explanation_error,
                 r.id AS r_id, r.name AS r_name, r.rule_type AS r_type, r.params AS r_params,
                 x.name AS exporter_name
          FROM alert_events e
@@ -411,14 +415,46 @@ pub async fn get_event(
                 .unwrap_or(serde_json::Value::Null),
         });
 
+    let explanation: Option<String> = row
+        .try_get::<Option<String>, _>("explanation")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty());
+    let attempts: i64 = row.try_get("explanation_attempts").unwrap_or(0);
+    let (llm_enabled, _) = crate::llm::llm_settings(&state.db).await;
+
     Ok(Json(EventDetail {
         event: event_from_row(&row),
         window_min: row.try_get("window_min").ok().flatten(),
-        explanation: row.try_get("explanation").ok().flatten(),
+        explanation_status: crate::llm::explanation_status(
+            explanation.is_some(),
+            attempts,
+            llm_enabled,
+        ),
+        explanation_error: row.try_get("explanation_error").ok().flatten(),
+        explanation,
         feedback: row.try_get("feedback").ok().flatten(),
         exporter_name: row.try_get("exporter_name").ok().flatten(),
         rule,
     }))
+}
+
+/// Puts an event back in the explainer queue (task 17.5 R-05)
+pub async fn retry_explanation(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> StatusCode {
+    match sqlx::query(
+        "UPDATE alert_events SET explanation_attempts = 0, explanation_error = NULL WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    {
+        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND,
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 pub async fn clear_events(State(state): State<Arc<AppState>>) -> StatusCode {

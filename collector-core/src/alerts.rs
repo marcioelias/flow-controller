@@ -166,6 +166,14 @@ pub async fn init_tables(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE alert_events ADD COLUMN explanation TEXT")
         .execute(pool)
         .await;
+    let _ = sqlx::query(
+        "ALTER TABLE alert_events ADD COLUMN explanation_attempts INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("ALTER TABLE alert_events ADD COLUMN explanation_error TEXT")
+        .execute(pool)
+        .await;
 
     // Prune old events at startup
     sqlx::query("DELETE FROM alert_events WHERE created_at < datetime('now', '-7 days')")

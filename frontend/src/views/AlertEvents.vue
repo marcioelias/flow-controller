@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAlertsStore, type AlertEvent, type AlertEventDetail } from '../stores/alerts'
 import { Bell, Trash2, RefreshCw, X, Activity, Loader2 } from 'lucide-vue-next'
 import SortTh from '../components/SortTh.vue'
+import ExplanationState from '../components/ExplanationState.vue'
 import type { SortDir, SortState } from '../composables/useSort'
 import { formatBps, formatBytes } from '../utils/format'
 
@@ -86,7 +87,15 @@ const loadingDetail = ref(false)
 
 async function openEvent(ev: AlertEvent) {
   loadingDetail.value = true
-  selected.value = { ...ev, explanation: null, feedback: null, exporter_name: null, rule: null }
+  selected.value = {
+    ...ev,
+    explanation: null,
+    explanation_status: 'pending',
+    explanation_error: null,
+    feedback: null,
+    exporter_name: null,
+    rule: null,
+  }
   try {
     selected.value = await store.getEvent(ev.id)
   } catch {
@@ -359,13 +368,20 @@ onUnmounted(() => {
               </template>
             </div>
 
-            <div v-if="selected.alert_type === 'ml_anomaly'" class="space-y-1">
+            <div class="space-y-1">
               <div class="flex items-center justify-between">
                 <p class="text-xs text-zinc-500">Explicação IA</p>
-                <router-link to="/ai" class="text-xs text-emerald-400 hover:text-emerald-300">Abrir na tela de IA →</router-link>
+                <router-link v-if="selected.alert_type === 'ml_anomaly'" to="/ai" class="text-xs text-emerald-400 hover:text-emerald-300">Abrir na tela de IA →</router-link>
               </div>
-              <p v-if="selected.explanation" class="text-zinc-300 leading-relaxed">{{ selected.explanation }}</p>
-              <p v-else class="text-zinc-600 italic">sem explicação</p>
+              <p v-if="loadingDetail && !selected.explanation" class="text-zinc-600 italic">…</p>
+              <ExplanationState
+                v-else
+                :event-id="selected.id"
+                :explanation="selected.explanation"
+                :status="selected.explanation_status"
+                :error="selected.explanation_error"
+                @retried="selected.explanation_status = 'pending'"
+              />
               <p v-if="selected.feedback" class="text-xs text-zinc-500">
                 Feedback do operador:
                 <span class="text-zinc-300">{{ selected.feedback === 'false_positive' ? 'falso positivo' : 'ameaça confirmada' }}</span>

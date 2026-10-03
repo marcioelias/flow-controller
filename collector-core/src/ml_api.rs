@@ -47,8 +47,7 @@ pub async fn get_ml_status(
     State(state): State<Arc<AppState>>,
     axum::Extension(shared_status): axum::Extension<SharedMlStatus>,
 ) -> Result<Json<MlStatus>, StatusCode> {
-    let llm_enabled = std::env::var("LLM_ENABLED").as_deref() == Ok("true");
-    let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "—".to_string());
+    let (llm_enabled, llm_model) = crate::llm::llm_settings(&state.db).await;
 
     let snapshot: Vec<MlModelStatus> = shared_status.read().map(|g| g.clone()).unwrap_or_default();
 
@@ -176,7 +175,8 @@ pub async fn get_ml_events(
     let rows = sqlx::query(&format!(
         "SELECT id, exporter_ip, src_ip, severity, message,
                 pps, avg_pkt_bytes, upload_bytes, download_bytes,
-                explanation, feedback, created_at
+                explanation, feedback, created_at,
+                explanation_attempts, explanation_error
          FROM alert_events
          WHERE alert_type = 'ml_anomaly'
          ORDER BY {col} {dir} NULLS LAST, id {dir}
@@ -188,10 +188,19 @@ pub async fn get_ml_events(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let (llm_enabled, _) = crate::llm::llm_settings(&state.db).await;
     let events: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
+            let explanation = r
+                .try_get::<Option<String>, _>("explanation")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+            let attempts = r.try_get::<i64, _>("explanation_attempts").unwrap_or(0);
             serde_json::json!({
+                "explanation_status": crate::llm::explanation_status(explanation.is_some(), attempts, llm_enabled),
+                "explanation_error": r.try_get::<Option<String>,_>("explanation_error").ok().flatten(),
                 "id":            r.try_get::<i64,_>("id").ok(),
                 "exporter_ip":   r.try_get::<String,_>("exporter_ip").unwrap_or_default(),
                 "src_ip":        r.try_get::<String,_>("src_ip").unwrap_or_default(),
@@ -201,7 +210,7 @@ pub async fn get_ml_events(
                 "avg_pkt_bytes": r.try_get::<f64,_>("avg_pkt_bytes").ok(),
                 "upload_bytes":  r.try_get::<i64,_>("upload_bytes").ok(),
                 "download_bytes":r.try_get::<i64,_>("download_bytes").ok(),
-                "explanation":   r.try_get::<Option<String>,_>("explanation").ok().flatten(),
+                "explanation":   explanation,
                 "feedback":      r.try_get::<Option<String>,_>("feedback").ok().flatten(),
                 "created_at":    r.try_get::<Option<String>,_>("created_at").ok().flatten(),
             })

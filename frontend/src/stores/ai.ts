@@ -36,6 +36,8 @@ export interface MlAnomaly {
   upload_bytes: number | null
   download_bytes: number | null
   explanation: string | null
+  explanation_status: 'done' | 'failed' | 'pending' | 'disabled'
+  explanation_error: string | null
   feedback: string | null
   created_at: string | null
 }
