@@ -157,6 +157,13 @@ One alert event with `window_min`, `explanation`, `feedback`, `exporter_name` an
 
 ---
 
+### POST /api/alerts/events/:id/explain  ← NEW (task 17.5)
+Puts the event back in the AI explainer queue (resets attempts and error). **204**, **404** if missing.
+Event payloads (`/api/alerts/events/:id`, `/api/ml/events`) carry `explanation_status`
+(`done|failed|pending|disabled`) and `explanation_error`.
+
+---
+
 ### GET /api/stats/ports  ← NEW (task 2.3)
 Top service ports (`least(src_port, dst_port)`, both directions summed) ranked by p95 rate (task 17.2).
 
