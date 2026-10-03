@@ -150,6 +150,13 @@ aggregated conversations `(peer, protocol, service port)` and top service ports.
 
 ---
 
+### GET /api/alerts/events/:id  ← NEW (task 17.4)
+One alert event with `window_min`, `explanation`, `feedback`, `exporter_name` and
+`rule: { id, name, rule_type, params } | null`. **404** if missing.
+`GET /api/alerts/events` also returns `window_min` per event and accepts `sort`/`dir` (whitelisted; task 17.3 R-05).
+
+---
+
 ### GET /api/stats/ports  ← NEW (task 2.3)
 Top service ports (`least(src_port, dst_port)`, both directions summed) ranked by p95 rate (task 17.2).
 
