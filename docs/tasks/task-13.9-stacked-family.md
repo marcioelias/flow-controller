@@ -28,6 +28,8 @@ saída. Cores pedidas: verde/azul (entrada v4/v6), vermelho/amarelo (saída v4/v
 - Seletor Todos/IPv4/IPv6 nos dois gráficos; modo família única volta ao par
   Entrada/Saída clássico
 - Barra de stats sob cada gráfico (janela visível): mín · máx · méd · 95%
+  — o 95% fica sempre numa segunda linha própria, em entrada e saída, para não
+  mudar de posição conforme a largura dos números
 - Filtro por dispositivo no ao vivo: sem split de família (payload per-device é
   agregado) — cai para par único arrival-based
 
