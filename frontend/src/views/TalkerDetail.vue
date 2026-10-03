@@ -15,6 +15,8 @@ import {
 } from 'chart.js'
 import { ArrowLeft, ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, Search } from 'lucide-vue-next'
 import { bytesToBps, formatBps, formatBytes, formatNumber } from '../utils/format'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 import {
   COLOR_IN,
   COLOR_OUT,
@@ -102,6 +104,19 @@ function rate(bytes: number): string {
 function clock(sec: number): string {
   return new Date(sec * 1000).toTimeString().slice(0, 8)
 }
+
+const { sorted: sortedConversations, sort: convSort } = useSort(
+  () => detail.value?.conversations ?? [],
+  'down_bytes',
+  'desc',
+  {
+    peer_asn: (c) => c.peer_asn || null,
+    service: (c) => protoPort(c.protocol, c.port),
+  },
+)
+const { sorted: sortedPorts, sort: portSort } = useSort(() => detail.value?.ports ?? [], 'down_bytes', 'desc', {
+  service: (p) => protoPort(p.protocol, p.port),
+})
 
 // Série vem esparsa: preenche zeros de `from` a `to` no passo do bucket
 const filledSeries = computed(() => {
@@ -370,18 +385,18 @@ onUnmounted(() => {
               <table class="w-full text-sm">
                 <thead>
                   <tr class="border-b border-zinc-800 text-zinc-400 text-left">
-                    <th class="px-4 py-2 font-medium">Peer</th>
-                    <th class="px-4 py-2 font-medium">ASN</th>
-                    <th class="px-4 py-2 font-medium">Serviço</th>
-                    <th class="px-4 py-2 font-medium text-right">↓ Média</th>
-                    <th class="px-4 py-2 font-medium text-right">↑ Média</th>
-                    <th class="px-4 py-2 font-medium text-right">Pacotes</th>
-                    <th class="px-4 py-2 font-medium text-right">Último</th>
+                    <SortTh :sort="convSort" k="peer" class="px-4 py-2">Peer</SortTh>
+                    <SortTh :sort="convSort" k="peer_asn" class="px-4 py-2">ASN</SortTh>
+                    <SortTh :sort="convSort" k="service" class="px-4 py-2">Serviço</SortTh>
+                    <SortTh :sort="convSort" k="down_bytes" align="right" class="px-4 py-2">↓ Média</SortTh>
+                    <SortTh :sort="convSort" k="up_bytes" align="right" class="px-4 py-2">↑ Média</SortTh>
+                    <SortTh :sort="convSort" k="packets" align="right" class="px-4 py-2">Pacotes</SortTh>
+                    <SortTh :sort="convSort" k="last_seen" align="right" class="px-4 py-2">Último</SortTh>
                   </tr>
                 </thead>
                 <tbody>
                   <tr
-                    v-for="c in detail.conversations"
+                    v-for="c in sortedConversations"
                     :key="`${c.peer}-${c.protocol}-${c.port}`"
                     class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors"
                   >
@@ -408,15 +423,15 @@ onUnmounted(() => {
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-zinc-800 text-zinc-400 text-left">
-                  <th class="px-4 py-2 font-medium">Serviço</th>
-                  <th class="px-4 py-2 font-medium text-right">↓</th>
-                  <th class="px-4 py-2 font-medium text-right">↑</th>
-                  <th class="px-4 py-2 font-medium text-right">Peers</th>
+                  <SortTh :sort="portSort" k="service" class="px-4 py-2">Serviço</SortTh>
+                  <SortTh :sort="portSort" k="down_bytes" align="right" class="px-4 py-2">↓</SortTh>
+                  <SortTh :sort="portSort" k="up_bytes" align="right" class="px-4 py-2">↑</SortTh>
+                  <SortTh :sort="portSort" k="peers" align="right" class="px-4 py-2">Peers</SortTh>
                 </tr>
               </thead>
               <tbody>
                 <tr
-                  v-for="p in detail.ports"
+                  v-for="p in sortedPorts"
                   :key="`${p.protocol}-${p.port}`"
                   class="border-b border-zinc-800/50"
                 >

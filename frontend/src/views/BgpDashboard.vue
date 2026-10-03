@@ -3,6 +3,8 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBgpStore } from '../stores/bgp'
 import { Radio, Activity, Plus, Trash2, Server, Bot } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const router = useRouter()
 const bgp = useBgpStore()
@@ -20,6 +22,11 @@ const withdrawConfirm = ref<number | null>(null)
 const withdrawLoading = ref(false)
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
+
+const { sorted, sort } = useSort(() => bgp.announcements, 'announced_at', 'desc', {
+  peer_name: (a) => a.peer_name ?? 'Todos',
+  origin: (a) => (a.origin === 'anomaly_detector' ? 'Auto' : 'Manual'),
+})
 
 function stateColor(state: string) {
   if (state === 'up')   return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
@@ -168,17 +175,17 @@ onUnmounted(() => {
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-xs text-zinc-500 border-b border-zinc-800">
-              <th class="pb-2 pr-4">Prefixo</th>
-              <th class="pb-2 pr-4">Next-hop</th>
-              <th class="pb-2 pr-4">Community</th>
-              <th class="pb-2 pr-4">Peer</th>
-              <th class="pb-2 pr-4">Origem</th>
-              <th class="pb-2 pr-4">Anunciado</th>
+              <SortTh :sort="sort" k="prefix" class="pb-2 pr-4">Prefixo</SortTh>
+              <SortTh :sort="sort" k="next_hop" class="pb-2 pr-4">Next-hop</SortTh>
+              <SortTh :sort="sort" k="community_name" class="pb-2 pr-4">Community</SortTh>
+              <SortTh :sort="sort" k="peer_name" class="pb-2 pr-4">Peer</SortTh>
+              <SortTh :sort="sort" k="origin" class="pb-2 pr-4">Origem</SortTh>
+              <SortTh :sort="sort" k="announced_at" class="pb-2 pr-4">Anunciado</SortTh>
               <th class="pb-2"></th>
             </tr>
           </thead>
           <tbody class="divide-y divide-zinc-800/50">
-            <tr v-for="a in bgp.announcements" :key="a.id" class="hover:bg-zinc-800/30 transition-colors">
+            <tr v-for="a in sorted" :key="a.id" class="hover:bg-zinc-800/30 transition-colors">
               <td class="py-2.5 pr-4 font-mono text-slate-200">{{ a.prefix }}</td>
               <td class="py-2.5 pr-4 font-mono text-zinc-400">{{ a.next_hop }}</td>
               <td class="py-2.5 pr-4">

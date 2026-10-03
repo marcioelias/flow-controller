@@ -152,6 +152,20 @@ pub async fn get_ml_events(
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
+    // Server-side sort over a whitelist (task 17.3 R-05)
+    let col = match params.get("sort").map(String::as_str) {
+        Some("exporter_ip") => "exporter_ip",
+        Some("src_ip") => "src_ip",
+        Some("severity") => "CASE severity WHEN 'critical' THEN 2 ELSE 1 END",
+        Some("pps") => "pps",
+        _ => "id",
+    };
+    let dir = if params.get("dir").map(String::as_str) == Some("asc") {
+        "ASC"
+    } else {
+        "DESC"
+    };
+
     let total = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM alert_events WHERE alert_type = 'ml_anomaly'",
     )
@@ -159,15 +173,15 @@ pub async fn get_ml_events(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let rows = sqlx::query(
+    let rows = sqlx::query(&format!(
         "SELECT id, exporter_ip, src_ip, severity, message,
                 pps, avg_pkt_bytes, upload_bytes, download_bytes,
                 explanation, feedback, created_at
          FROM alert_events
          WHERE alert_type = 'ml_anomaly'
-         ORDER BY id DESC
-         LIMIT ? OFFSET ?",
-    )
+         ORDER BY {col} {dir} NULLS LAST, id {dir}
+         LIMIT ? OFFSET ?"
+    ))
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.db)

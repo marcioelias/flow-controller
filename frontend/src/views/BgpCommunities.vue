@@ -2,8 +2,11 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useBgpStore, type BgpCommunity } from '../stores/bgp'
 import { Tag, Plus, Edit2, Trash2 } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const bgp = useBgpStore()
+const { sorted, sort } = useSort(() => bgp.communities, 'name', 'asc')
 
 interface CommunityForm { name: string; community: string; description: string }
 const emptyForm = (): CommunityForm => ({ name: '', community: '', description: '' })
@@ -74,14 +77,14 @@ onMounted(() => bgp.loadCommunities())
       <table v-else class="w-full text-sm">
         <thead class="border-b border-zinc-800">
           <tr class="text-left text-xs text-zinc-500">
-            <th class="px-4 py-3">Nome</th>
-            <th class="px-4 py-3">Community</th>
-            <th class="px-4 py-3">Descrição</th>
+            <SortTh :sort="sort" k="name" class="px-4 py-3">Nome</SortTh>
+            <SortTh :sort="sort" k="community" class="px-4 py-3">Community</SortTh>
+            <SortTh :sort="sort" k="description" class="px-4 py-3">Descrição</SortTh>
             <th class="px-4 py-3"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-800/50">
-          <tr v-for="c in bgp.communities" :key="c.id" class="hover:bg-zinc-800/30 transition-colors">
+          <tr v-for="c in sorted" :key="c.id" class="hover:bg-zinc-800/30 transition-colors">
             <td class="px-4 py-3 font-medium text-slate-200">
               <span class="inline-flex items-center px-2 py-0.5 rounded text-xs border" :class="communityColor(c.id)">{{ c.name }}</span>
             </td>

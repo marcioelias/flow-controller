@@ -14,6 +14,8 @@ import {
 } from 'chart.js'
 import { Users, RefreshCw, Search } from 'lucide-vue-next'
 import { formatBps, formatNumber } from '../utils/format'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
@@ -57,6 +59,8 @@ function openTalker(ip: string) {
 }
 
 const top10 = computed(() => rows.value.slice(0, 10))
+const { sorted: sortedRanked, sort } = useSort(() => rows.value.filter((r) => r.src_ip !== 'outros'), 'p95_bps')
+const sorted = computed(() => [...sortedRanked.value, ...rows.value.filter((r) => r.src_ip === 'outros')])
 
 const barChartData = computed(() => ({
   labels: top10.value.map((r) => r.src_ip),
@@ -231,22 +235,22 @@ onUnmounted(() => {
           <thead>
             <tr class="border-b border-zinc-800 text-zinc-400 text-left">
               <th class="px-6 py-3 font-medium w-12">#</th>
-              <th class="px-6 py-3 font-medium">IP Origem</th>
-              <th class="px-6 py-3 font-medium text-right">95º perc.</th>
-              <th class="px-6 py-3 font-medium text-right">Média</th>
-              <th class="px-6 py-3 font-medium text-right">Pacotes</th>
-              <th class="px-6 py-3 font-medium text-right">Flows</th>
+              <SortTh :sort="sort" k="src_ip" class="px-6 py-3">IP Origem</SortTh>
+              <SortTh :sort="sort" k="p95_bps" align="right" class="px-6 py-3">95º perc.</SortTh>
+              <SortTh :sort="sort" k="avg_bps" align="right" class="px-6 py-3">Média</SortTh>
+              <SortTh :sort="sort" k="total_packets" align="right" class="px-6 py-3">Pacotes</SortTh>
+              <SortTh :sort="sort" k="flow_count" align="right" class="px-6 py-3">Flows</SortTh>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="(row, i) in rows"
+              v-for="row in sorted"
               :key="row.src_ip"
               class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors"
               :class="{ 'cursor-pointer': row.src_ip !== 'outros' }"
               @click="openTalker(row.src_ip)"
             >
-              <td class="px-6 py-3 text-zinc-500 font-mono">{{ i + 1 }}</td>
+              <td class="px-6 py-3 text-zinc-500 font-mono">{{ rows.indexOf(row) + 1 }}</td>
               <td class="px-6 py-3 font-mono" :class="row.src_ip === 'outros' ? 'text-zinc-500 italic' : 'text-slate-200'">
                 {{ row.src_ip === 'outros' ? 'Outros — além do limite da licença' : row.src_ip }}
               </td>

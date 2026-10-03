@@ -15,6 +15,8 @@ import {
 import { bytesToBps, formatBps, formatBytes } from '../utils/format'
 import { useLiveTraffic, pruneBuckets, LIVE_WINDOW_SECS, type LiveBucket } from '../composables/useLiveTraffic'
 import { ArrowUpDown } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 import { COLOR_IN, COLOR_OUT, mirroredLegend, mirroredTooltip, mirroredYTicks, stackedMirrorDatasets, seriesStats, loadMirrorFlip, saveMirrorFlip, type FamFilter } from '../lib/chartTheme'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler)
@@ -140,6 +142,10 @@ function exporterName(ip: string) {
   const found = exporters.value.find(e => e.ip_address === ip)
   return found ? found.name : ip
 }
+
+const { sorted: sortedExporterStats, sort: exporterSort } = useSort(() => exporterStats.value, 'total_bytes', 'desc', {
+  name: (s) => exporterName(s.exporter_ip),
+})
 
 function selectDevice(ip: string | null) {
   selectedDevice.value = ip
@@ -775,18 +781,18 @@ onUnmounted(() => {
         <table class="w-full text-sm">
           <thead>
             <tr class="text-zinc-400 text-left border-b border-zinc-800">
-              <th class="px-6 py-3 font-medium">Dispositivo</th>
-              <th class="px-6 py-3 font-medium">IP</th>
-              <th class="px-6 py-3 font-medium text-right">Entrada</th>
-              <th class="px-6 py-3 font-medium text-right">Saída</th>
-              <th class="px-6 py-3 font-medium text-right">Total</th>
-              <th class="px-6 py-3 font-medium text-right">Flows</th>
-              <th class="px-6 py-3 font-medium text-right">Origens únicas</th>
+              <SortTh :sort="exporterSort" k="name" class="px-6 py-3">Dispositivo</SortTh>
+              <SortTh :sort="exporterSort" k="exporter_ip" class="px-6 py-3">IP</SortTh>
+              <SortTh :sort="exporterSort" k="in_bytes" align="right" class="px-6 py-3">Entrada</SortTh>
+              <SortTh :sort="exporterSort" k="out_bytes" align="right" class="px-6 py-3">Saída</SortTh>
+              <SortTh :sort="exporterSort" k="total_bytes" align="right" class="px-6 py-3">Total</SortTh>
+              <SortTh :sort="exporterSort" k="flow_count" align="right" class="px-6 py-3">Flows</SortTh>
+              <SortTh :sort="exporterSort" k="unique_sources" align="right" class="px-6 py-3">Origens únicas</SortTh>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="stat in exporterStats"
+              v-for="stat in sortedExporterStats"
               :key="stat.exporter_ip"
               class="border-b border-zinc-800/50 hover:bg-zinc-800/20 transition-colors cursor-pointer"
               @click="selectDevice(stat.exporter_ip)"

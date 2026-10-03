@@ -3,6 +3,8 @@ import { ref, onMounted } from 'vue'
 import { useAlertsStore } from '../stores/alerts'
 import { useAuthStore } from '../stores/auth'
 import { ShieldAlert, Plus, Pencil, Trash2, ToggleLeft, ToggleRight } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const store = useAlertsStore()
 const auth = useAuthStore()
@@ -191,6 +193,15 @@ function ruleTypeLabel(t: string) {
   return t === 'upload_inversion' ? 'Upload Inversion' : 'Attack Signature'
 }
 
+function exporterLabel(id: number) {
+  return exporters.value.find(e => e.id === id)?.ip_address ?? `#${id}`
+}
+
+const { sorted, sort } = useSort(() => store.rules, 'name', 'asc', {
+  rule_type: (r) => ruleTypeLabel(r.rule_type),
+  exporter: (r) => (r.exporter_id ? exporterLabel(r.exporter_id) : 'Todos'),
+})
+
 onMounted(async () => {
   await Promise.all([store.loadRules(), loadExporters(), loadCommunities()])
 })
@@ -219,15 +230,15 @@ onMounted(async () => {
       <table v-else class="w-full text-sm">
         <thead>
           <tr class="text-left text-xs text-zinc-500 border-b border-zinc-800 bg-zinc-900/80">
-            <th class="px-4 py-3">Nome</th>
-            <th class="px-4 py-3">Tipo</th>
-            <th class="px-4 py-3">Exporter</th>
-            <th class="px-4 py-3">Status</th>
+            <SortTh :sort="sort" k="name" class="px-4 py-3">Nome</SortTh>
+            <SortTh :sort="sort" k="rule_type" class="px-4 py-3">Tipo</SortTh>
+            <SortTh :sort="sort" k="exporter" class="px-4 py-3">Exporter</SortTh>
+            <SortTh :sort="sort" k="enabled" class="px-4 py-3">Status</SortTh>
             <th class="px-4 py-3"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-800/50">
-          <tr v-for="rule in store.rules" :key="rule.id" class="hover:bg-zinc-800/30 transition-colors">
+          <tr v-for="rule in sorted" :key="rule.id" class="hover:bg-zinc-800/30 transition-colors">
             <td class="px-4 py-3 text-slate-200 font-medium">{{ rule.name }}</td>
             <td class="px-4 py-3">
               <span class="px-2 py-0.5 rounded text-xs font-mono"
@@ -239,7 +250,7 @@ onMounted(async () => {
             </td>
             <td class="px-4 py-3 text-zinc-400 text-xs font-mono">
               {{ rule.exporter_id
-                  ? (exporters.find(e => e.id === rule.exporter_id)?.ip_address ?? `#${rule.exporter_id}`)
+                  ? exporterLabel(rule.exporter_id)
                   : 'Todos' }}
             </td>
             <td class="px-4 py-3">

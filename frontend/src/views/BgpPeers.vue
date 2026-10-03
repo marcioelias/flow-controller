@@ -2,8 +2,11 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useBgpStore, type BgpPeer } from '../stores/bgp'
 import { Server, Plus, Edit2, Trash2, AlertTriangle, CheckCircle, ToggleLeft, ToggleRight } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const bgp = useBgpStore()
+const { sorted, sort } = useSort(() => bgp.peers, 'name', 'asc')
 
 interface PeerForm {
   name: string
@@ -141,19 +144,19 @@ onMounted(() => bgp.loadPeers())
       <table v-else class="w-full text-sm">
         <thead class="border-b border-zinc-800">
           <tr class="text-left text-xs text-zinc-500">
-            <th class="px-4 py-3">Nome</th>
-            <th class="px-4 py-3">Neighbor IP</th>
-            <th class="px-4 py-3">Local IP</th>
-            <th class="px-4 py-3">ASN local</th>
-            <th class="px-4 py-3">ASN remoto</th>
-            <th class="px-4 py-3">Hold</th>
-            <th class="px-4 py-3">MD5</th>
-            <th class="px-4 py-3">Status</th>
+            <SortTh :sort="sort" k="name" class="px-4 py-3">Nome</SortTh>
+            <SortTh :sort="sort" k="neighbor_ip" class="px-4 py-3">Neighbor IP</SortTh>
+            <SortTh :sort="sort" k="local_ip" class="px-4 py-3">Local IP</SortTh>
+            <SortTh :sort="sort" k="local_as" class="px-4 py-3">ASN local</SortTh>
+            <SortTh :sort="sort" k="peer_as" class="px-4 py-3">ASN remoto</SortTh>
+            <SortTh :sort="sort" k="hold_time" class="px-4 py-3">Hold</SortTh>
+            <SortTh :sort="sort" k="has_md5" class="px-4 py-3">MD5</SortTh>
+            <SortTh :sort="sort" k="enabled" class="px-4 py-3">Status</SortTh>
             <th class="px-4 py-3"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-800/50">
-          <tr v-for="p in bgp.peers" :key="p.id" class="hover:bg-zinc-800/30 transition-colors">
+          <tr v-for="p in sorted" :key="p.id" class="hover:bg-zinc-800/30 transition-colors">
             <td class="px-4 py-3 text-slate-200 font-medium">
               {{ p.name }}
               <p v-if="p.description" class="text-xs text-zinc-500 font-normal">{{ p.description }}</p>

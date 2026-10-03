@@ -4,14 +4,14 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useUsersStore } from '../stores/users'
 import { Search, Plus, Edit, Trash2, Shield, User as UserIcon } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const usersStore = useUsersStore()
 
 const searchQuery = ref('')
-const sortKey = ref<'username' | 'is_admin' | 'id'>('id')
-const sortDesc = ref(false)
 
 onMounted(async () => {
   if (!authStore.isAdmin) {
@@ -21,36 +21,13 @@ onMounted(async () => {
   await usersStore.loadUsers()
 })
 
-const filteredAndSortedUsers = computed(() => {
-  let result = usersStore.users
-
-  // Filtro
-  if (searchQuery.value) {
-    const q = searchQuery.value.toLowerCase()
-    result = result.filter(u => u.username.toLowerCase().includes(q))
-  }
-
-  // Ordenação
-  result = [...result].sort((a, b) => {
-    let valA = a[sortKey.value]
-    let valB = b[sortKey.value]
-
-    if (valA < valB) return sortDesc.value ? 1 : -1
-    if (valA > valB) return sortDesc.value ? -1 : 1
-    return 0
-  })
-
-  return result
+const filteredUsers = computed(() => {
+  if (!searchQuery.value) return usersStore.users
+  const q = searchQuery.value.toLowerCase()
+  return usersStore.users.filter(u => u.username.toLowerCase().includes(q))
 })
 
-function sortBy(key: 'username' | 'is_admin' | 'id') {
-  if (sortKey.value === key) {
-    sortDesc.value = !sortDesc.value
-  } else {
-    sortKey.value = key
-    sortDesc.value = false
-  }
-}
+const { sorted: filteredAndSortedUsers, sort } = useSort(() => filteredUsers.value, 'id', 'asc')
 
 async function handleDelete(id: number) {
   if (!confirm('Tem certeza que deseja remover este usuário?')) return
@@ -99,24 +76,9 @@ async function handleDelete(id: number) {
           <table class="w-full text-left text-sm whitespace-nowrap">
             <thead class="bg-zinc-950/50 border-b border-zinc-800 text-zinc-400">
               <tr>
-                <th scope="col" class="px-6 py-4 font-semibold cursor-pointer hover:text-emerald-400 select-none" @click="sortBy('username')">
-                  <div class="flex items-center gap-2">
-                    Usuário
-                    <span v-if="sortKey === 'username'" class="text-xs">{{ sortDesc ? '↓' : '↑' }}</span>
-                  </div>
-                </th>
-                <th scope="col" class="px-6 py-4 font-semibold cursor-pointer hover:text-emerald-400 select-none" @click="sortBy('is_admin')">
-                  <div class="flex items-center gap-2">
-                    Privilégio
-                    <span v-if="sortKey === 'is_admin'" class="text-xs">{{ sortDesc ? '↓' : '↑' }}</span>
-                  </div>
-                </th>
-                <th scope="col" class="px-6 py-4 font-semibold cursor-pointer hover:text-emerald-400 select-none" @click="sortBy('id')">
-                  <div class="flex items-center gap-2">
-                    ID
-                    <span v-if="sortKey === 'id'" class="text-xs">{{ sortDesc ? '↓' : '↑' }}</span>
-                  </div>
-                </th>
+                <SortTh :sort="sort" k="username" scope="col" class="px-6 py-4">Usuário</SortTh>
+                <SortTh :sort="sort" k="is_admin" scope="col" class="px-6 py-4">Privilégio</SortTh>
+                <SortTh :sort="sort" k="id" scope="col" class="px-6 py-4">ID</SortTh>
                 <th scope="col" class="px-6 py-4 font-semibold text-right">Ações</th>
               </tr>
             </thead>

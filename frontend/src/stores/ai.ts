@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { SortDir } from '../composables/useSort'
 import { useAuthStore } from './auth'
 
 export interface ExporterModelStatus {
@@ -87,13 +88,21 @@ export const useAiStore = defineStore('ai', () => {
     stats.value = await withLoading(() => apiGet<MlStats>('/api/ml/stats'))
   }
 
+  // Paginada no servidor: a ordenação vai junto na consulta (task 17.3 R-05)
+  const eventSortKey = ref('created_at')
+  const eventSortDir = ref<SortDir>('desc')
+
   async function loadEvents(page = 0, limit = 50) {
+    const sort = `&sort=${eventSortKey.value}&dir=${eventSortDir.value}`
     const resp = await withLoading(() =>
-      apiGet<MlEventsResponse>(`/api/ml/events?limit=${limit}&offset=${page * limit}`)
+      apiGet<MlEventsResponse>(`/api/ml/events?limit=${limit}&offset=${page * limit}${sort}`)
     )
     events.value = resp.events
     eventsTotal.value = resp.total
   }
 
-  return { status, stats, events, eventsTotal, loading, error, loadStatus, loadStats, loadEvents }
+  return {
+    status, stats, events, eventsTotal, loading, error,
+    eventSortKey, eventSortDir, loadStatus, loadStats, loadEvents,
+  }
 })

@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useBgpStore } from '../stores/bgp'
 import { History, Trash2, Bot, User } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const bgp = useBgpStore()
 const showOnlyActive = ref(true)
@@ -14,6 +16,12 @@ const filtered = computed(() =>
     ? bgp.announcements.filter(a => !a.withdrawn_at)
     : bgp.announcements
 )
+
+const { sorted, sort } = useSort(() => filtered.value, 'announced_at', 'desc', {
+  peer_name: (a) => a.peer_name ?? 'Todos',
+  origin: (a) => (a.origin === 'anomaly_detector' ? 'Auto' : 'Manual'),
+  status: (a) => (a.withdrawn_at ? 'retirado' : 'ativo'),
+})
 
 function formatDate(s: string | null) {
   if (!s) return '—'
@@ -57,19 +65,19 @@ onMounted(load)
         <table class="w-full text-sm">
           <thead class="border-b border-zinc-800">
             <tr class="text-left text-xs text-zinc-500">
-              <th class="px-4 py-3">Prefixo</th>
-              <th class="px-4 py-3">Next-hop</th>
-              <th class="px-4 py-3">Community</th>
-              <th class="px-4 py-3">Peer</th>
-              <th class="px-4 py-3">Origem</th>
-              <th class="px-4 py-3">Anunciado</th>
-              <th class="px-4 py-3">Retirado</th>
-              <th class="px-4 py-3">Status</th>
+              <SortTh :sort="sort" k="prefix" class="px-4 py-3">Prefixo</SortTh>
+              <SortTh :sort="sort" k="next_hop" class="px-4 py-3">Next-hop</SortTh>
+              <SortTh :sort="sort" k="community_name" class="px-4 py-3">Community</SortTh>
+              <SortTh :sort="sort" k="peer_name" class="px-4 py-3">Peer</SortTh>
+              <SortTh :sort="sort" k="origin" class="px-4 py-3">Origem</SortTh>
+              <SortTh :sort="sort" k="announced_at" class="px-4 py-3">Anunciado</SortTh>
+              <SortTh :sort="sort" k="withdrawn_at" class="px-4 py-3">Retirado</SortTh>
+              <SortTh :sort="sort" k="status" class="px-4 py-3">Status</SortTh>
               <th class="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody class="divide-y divide-zinc-800/50">
-            <tr v-for="a in filtered" :key="a.id" class="hover:bg-zinc-800/30 transition-colors" :class="a.withdrawn_at ? 'opacity-50' : ''">
+            <tr v-for="a in sorted" :key="a.id" class="hover:bg-zinc-800/30 transition-colors" :class="a.withdrawn_at ? 'opacity-50' : ''">
               <td class="px-4 py-2.5 font-mono text-slate-200">{{ a.prefix }}</td>
               <td class="px-4 py-2.5 font-mono text-zinc-400">{{ a.next_hop }}</td>
               <td class="px-4 py-2.5">

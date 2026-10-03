@@ -13,6 +13,8 @@ import {
 } from 'chart.js'
 import { Plug, RefreshCw } from 'lucide-vue-next'
 import { formatBps } from '../utils/format'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
@@ -48,6 +50,7 @@ const minuteOptions = [
 ]
 
 const top15 = computed(() => rows.value.slice(0, 15))
+const { sorted, sort } = useSort(() => rows.value, 'p95_bps')
 
 const barChartData = computed(() => ({
   labels: top15.value.map((r) => `${r.port} (${r.service})`),
@@ -220,16 +223,16 @@ onUnmounted(() => {
         <table v-else class="w-full text-sm">
           <thead>
             <tr class="border-b border-zinc-800 text-zinc-400 text-left">
-              <th class="px-6 py-3 font-medium">Porta</th>
-              <th class="px-6 py-3 font-medium">Serviço</th>
-              <th class="px-6 py-3 font-medium text-right">95º perc.</th>
-              <th class="px-6 py-3 font-medium text-right">Média</th>
-              <th class="px-6 py-3 font-medium text-right">% do total</th>
+              <SortTh :sort="sort" k="port" class="px-6 py-3">Porta</SortTh>
+              <SortTh :sort="sort" k="service" class="px-6 py-3">Serviço</SortTh>
+              <SortTh :sort="sort" k="p95_bps" align="right" class="px-6 py-3">95º perc.</SortTh>
+              <SortTh :sort="sort" k="avg_bps" align="right" class="px-6 py-3">Média</SortTh>
+              <SortTh :sort="sort" k="share_pct" align="right" class="px-6 py-3">% do total</SortTh>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in rows"
+              v-for="row in sorted"
               :key="row.port"
               class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors"
             >

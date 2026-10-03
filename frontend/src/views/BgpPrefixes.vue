@@ -2,8 +2,11 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useBgpStore, type BgpPrefix } from '../stores/bgp'
 import { ListFilter, Plus, Edit2, Trash2, Radio } from 'lucide-vue-next'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const bgp = useBgpStore()
+const { sorted, sort } = useSort(() => bgp.prefixes, 'prefix', 'asc')
 
 interface PrefixForm { prefix: string; description: string }
 const emptyForm = (): PrefixForm => ({ prefix: '', description: '' })
@@ -91,13 +94,13 @@ onMounted(async () => {
       <table v-else class="w-full text-sm">
         <thead class="border-b border-zinc-800">
           <tr class="text-left text-xs text-zinc-500">
-            <th class="px-4 py-3">Prefixo</th>
-            <th class="px-4 py-3">Descrição</th>
+            <SortTh :sort="sort" k="prefix" class="px-4 py-3">Prefixo</SortTh>
+            <SortTh :sort="sort" k="description" class="px-4 py-3">Descrição</SortTh>
             <th class="px-4 py-3"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-800/50">
-          <tr v-for="p in bgp.prefixes" :key="p.id" class="hover:bg-zinc-800/30 transition-colors">
+          <tr v-for="p in sorted" :key="p.id" class="hover:bg-zinc-800/30 transition-colors">
             <td class="px-4 py-3 font-mono text-slate-200">{{ p.prefix }}</td>
             <td class="px-4 py-3 text-zinc-400">{{ p.description ?? '—' }}</td>
             <td class="px-4 py-3">

@@ -10,6 +10,8 @@ import {
 } from 'chart.js'
 import { Globe, RefreshCw } from 'lucide-vue-next'
 import { formatBps } from '../utils/format'
+import { useSort } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
@@ -50,6 +52,7 @@ const minuteOptions = [
 ]
 
 const top8 = computed(() => rows.value.slice(0, 8))
+const { sorted, sort } = useSort(() => rows.value, 'p95_bps')
 
 const donutChartData = computed(() => {
   const top = top8.value
@@ -217,15 +220,15 @@ onUnmounted(() => {
           <table v-else class="w-full text-sm">
             <thead>
               <tr class="border-b border-zinc-800 text-zinc-400 text-left">
-                <th class="px-6 py-3 font-medium">ASN</th>
-                <th class="px-6 py-3 font-medium">Label</th>
-                <th class="px-6 py-3 font-medium text-right">95º perc.</th>
-                <th class="px-6 py-3 font-medium text-right">Média</th>
+                <SortTh :sort="sort" k="asn" class="px-6 py-3">ASN</SortTh>
+                <SortTh :sort="sort" k="label" class="px-6 py-3">Label</SortTh>
+                <SortTh :sort="sort" k="p95_bps" align="right" class="px-6 py-3">95º perc.</SortTh>
+                <SortTh :sort="sort" k="avg_bps" align="right" class="px-6 py-3">Média</SortTh>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in rows"
+                v-for="row in sorted"
                 :key="row.asn"
                 class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors"
               >

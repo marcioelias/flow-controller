@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useAiStore } from '../stores/ai'
 import { useAuthStore } from '../stores/auth'
 import { Brain, RefreshCw, AlertTriangle, CheckCircle2, Loader2, X, ThumbsDown, ShieldAlert } from 'lucide-vue-next'
+import { useSort, type SortState } from '../composables/useSort'
+import SortTh from '../components/SortTh.vue'
 
 const store = useAiStore()
 const page = ref(0)
@@ -51,6 +54,25 @@ function warmupPct(s: { samples_collected: number; samples_needed: number }) {
 }
 
 const totalPages = () => Math.ceil(store.eventsTotal / perPage)
+
+const eventSort: SortState = {
+  key: storeToRefs(store).eventSortKey,
+  dir: storeToRefs(store).eventSortDir,
+  toggle(k: string) {
+    if (store.eventSortKey === k) {
+      store.eventSortDir = store.eventSortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      store.eventSortKey = k
+      store.eventSortDir = k === 'exporter_ip' || k === 'src_ip' ? 'asc' : 'desc'
+    }
+    page.value = 0
+    store.loadEvents(0, perPage)
+  },
+}
+
+const { sorted, sort } = useSort(() => store.status?.exporters ?? [], 'exporter_ip', 'asc', {
+  status: (e) => statusLabel(e.status),
+})
 
 onMounted(async () => {
   await loadAll()
@@ -160,15 +182,15 @@ function formatPps(pps: number): string {
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-xs text-zinc-500 border-b border-zinc-800 bg-zinc-900/80">
-              <th class="px-4 py-3">Exporter</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3">Amostras</th>
-              <th class="px-4 py-3">Pontuações</th>
-              <th class="px-4 py-3">Anomalias</th>
+              <SortTh :sort="sort" k="exporter_ip" class="px-4 py-3">Exporter</SortTh>
+              <SortTh :sort="sort" k="status" class="px-4 py-3">Status</SortTh>
+              <SortTh :sort="sort" k="samples_collected" class="px-4 py-3">Amostras</SortTh>
+              <SortTh :sort="sort" k="n_scored" class="px-4 py-3">Pontuações</SortTh>
+              <SortTh :sort="sort" k="anomalies_total" class="px-4 py-3">Anomalias</SortTh>
             </tr>
           </thead>
           <tbody class="divide-y divide-zinc-800/50">
-            <tr v-for="exp in store.status?.exporters" :key="exp.exporter_ip"
+            <tr v-for="exp in sorted" :key="exp.exporter_ip"
               class="hover:bg-zinc-800/30 transition-colors">
               <td class="px-4 py-3 font-mono text-slate-200 text-xs">{{ exp.exporter_ip }}</td>
               <td class="px-4 py-3">
@@ -232,12 +254,12 @@ function formatPps(pps: number): string {
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-xs text-zinc-500 border-b border-zinc-800 bg-zinc-900/80">
-              <th class="px-4 py-3">Hora</th>
-              <th class="px-4 py-3">Exporter</th>
-              <th class="px-4 py-3">IP</th>
-              <th class="px-4 py-3">Sev.</th>
+              <SortTh :sort="eventSort" k="created_at" class="px-4 py-3">Hora</SortTh>
+              <SortTh :sort="eventSort" k="exporter_ip" class="px-4 py-3">Exporter</SortTh>
+              <SortTh :sort="eventSort" k="src_ip" class="px-4 py-3">IP</SortTh>
+              <SortTh :sort="eventSort" k="severity" class="px-4 py-3">Sev.</SortTh>
               <th class="px-4 py-3">Score</th>
-              <th class="px-4 py-3">PPS</th>
+              <SortTh :sort="eventSort" k="pps" class="px-4 py-3">PPS</SortTh>
               <th class="px-4 py-3">Explicação IA</th>
             </tr>
           </thead>
