@@ -218,7 +218,7 @@ async function saveLanguage(v: string) {
 
       <template v-else>
         <!-- Abas -->
-        <nav class="flex gap-1 border-b border-zinc-800 overflow-x-auto">
+        <nav class="flex flex-wrap gap-1 border-b border-zinc-800">
           <button
             v-for="tab in TABS"
             :key="tab.name"
