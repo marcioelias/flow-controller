@@ -268,6 +268,11 @@ pub async fn run_llm_explainer(pool: sqlx::SqlitePool) {
         };
 
         for row in rows {
+            // Disabling the AI mid-batch must stop the next generation, not
+            // only the next cycle (each call can hold the CPU for ~25 s)
+            if !llm_settings(&pool).await.0 {
+                break;
+            }
             let event = match row_to_event(&row) {
                 Ok(e) => e,
                 Err(e) => {

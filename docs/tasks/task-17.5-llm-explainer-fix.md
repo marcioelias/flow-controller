@@ -26,6 +26,8 @@ Causas encontradas:
 
 - **R-01** — O explicador sobe sempre e relê `LLM_ENABLED`, `LLM_ENDPOINT`,
   `LLM_MODEL`, `APP_LANGUAGE` (banco → env) a cada ciclo. Desligado → só dorme.
+  `LLM_ENABLED` também é checado antes de cada evento do lote: desligar a IA para a
+  próxima geração, sem esperar o lote terminar.
 - **R-02** — Timeout de geração 120 s (modelo local em CPU, primeiro load).
 - **R-03** — Cada falha incrementa `explanation_attempts` e grava `explanation_error`
   (texto curto). Após **3** falhas o evento sai da fila.
