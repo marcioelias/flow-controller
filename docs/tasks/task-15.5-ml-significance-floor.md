@@ -19,3 +19,7 @@ descrevia 5 pps como "alta taxa de pacotes" (papagueava o frame de anomalia).
 - Prompt do LLM classifica a taxa (LOW/MODERATE/HIGH) e instrui explicitamente a
   nunca chamar taxa baixa de alta — anomalia de baixo volume é comportamental
 - Eventos históricos de baixo volume purgados no lab
+
+> **Nota (03/10/2026):** com amostragem 1:1000 estes pisos não filtram nada (um pacote
+> sorteado já vale 1 000 pps). A task 17.10 adiciona o piso em pacotes amostrados
+> (`ML_MIN_SAMPLES`) e passa a avaliar janelas de 1 minuto.

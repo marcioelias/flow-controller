@@ -45,6 +45,8 @@ const KNOWN_KEYS: &[&str] = &[
     // IA
     "ML_MIN_PPS",
     "ML_MIN_BPS",
+    "ML_MIN_SAMPLES",
+    "ML_ALERT_PERCENTILE",
     "LLM_ENABLED",
     "LLM_ENDPOINT",
     "LLM_MODEL",
@@ -190,6 +192,24 @@ pub async fn init_settings_table(pool: &SqlitePool) -> anyhow::Result<()> {
             "1000000",
             "Piso de bps para anomalias ML",
             "Segundo piso de significância (bits/s). Padrão 1 Mbps.",
+            "IA",
+        ),
+        (
+            "ML_MIN_SAMPLES",
+            "10",
+            "Mínimo de pacotes amostrados por minuto",
+            "Com amostragem (ex.: 1:1000) um único pacote sorteado vira 1000 pps; \
+             o ML só avalia o minuto de um IP com pelo menos este número de \
+             pacotes realmente amostrados.",
+            "IA",
+        ),
+        (
+            "ML_ALERT_PERCENTILE",
+            "0.1",
+            "Percentual superior que pode alertar",
+            "O limiar do ML é recalculado a cada treino: só o topo deste percentual \
+             das pontuações (padrão 0,1%) conta como anômalo, e o IP precisa estar \
+             anômalo em 3 dos últimos 5 minutos.",
             "IA",
         ),
         (

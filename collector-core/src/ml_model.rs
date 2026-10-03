@@ -11,8 +11,13 @@ use rand::Rng;
 use std::collections::VecDeque;
 
 pub const WARMUP_SAMPLES: usize = 5_000;
-pub const RING_BUFFER_SIZE: usize = 50_000;
-pub const ANOMALY_THRESHOLD: f64 = 0.65;
+/// Baseline must span at least an hour before scoring (task 17.10 R-03)
+pub const WARMUP_SECS: u64 = 3_600;
+/// Percentile thresholds never go below this score (R-04)
+pub const MIN_THRESHOLD: f64 = 0.6;
+const HOUR_RESERVOIR: usize = 2_000;
+const HOURS_KEPT: usize = 24;
+const RETRAIN_SECS: u64 = 600;
 
 const N_TREES: usize = 100;
 const SUBSAMPLE_SIZE: usize = 256;
@@ -141,12 +146,25 @@ impl IsolationForestModel {
 }
 
 // ---------------------------------------------------------------------------
-// Per-exporter model + ring buffer
+// Per-exporter model + 24 hourly reservoirs (task 17.10)
 // ---------------------------------------------------------------------------
+
+/// Uniform sample of one hour of minute vectors (Algorithm R)
+struct HourReservoir {
+    hour: u64,
+    seen: u64,
+    items: Vec<Vec<f64>>,
+}
 
 pub struct ExporterModel {
     forest: Option<IsolationForestModel>,
-    pub buffer: VecDeque<Vec<f64>>,
+    hours: VecDeque<HourReservoir>,
+    first_ts: Option<u64>,
+    last_train_ts: u64,
+    /// Score at or above which a minute counts as anomalous
+    pub threshold: f64,
+    /// Percentile the current threshold came from, for messages (e.g. 99.9)
+    pub threshold_pct: f64,
     pub n_scored: u64,
 }
 
@@ -154,26 +172,77 @@ impl ExporterModel {
     pub fn new() -> Self {
         Self {
             forest: None,
-            buffer: VecDeque::new(),
+            hours: VecDeque::new(),
+            first_ts: None,
+            last_train_ts: 0,
+            threshold: 1.0,
+            threshold_pct: 100.0,
             n_scored: 0,
         }
     }
 
-    /// Push a feature vector. Returns `true` when warm-up is done.
-    pub fn push(&mut self, v: Vec<f64>) -> bool {
-        if self.buffer.len() >= RING_BUFFER_SIZE {
-            self.buffer.pop_front();
+    /// Adds a minute vector observed at `ts` (unix seconds) to the baseline
+    pub fn observe(&mut self, v: Vec<f64>, ts: u64, rng: &mut impl Rng) {
+        self.first_ts.get_or_insert(ts);
+        let hour = ts / 3_600;
+        if self.hours.back().map(|h| h.hour) != Some(hour) {
+            self.hours.push_back(HourReservoir {
+                hour,
+                seen: 0,
+                items: Vec::new(),
+            });
+            while self.hours.len() > HOURS_KEPT {
+                self.hours.pop_front();
+            }
         }
-        self.buffer.push_back(v);
-        self.buffer.len() >= WARMUP_SAMPLES
+        let r = self.hours.back_mut().expect("just pushed");
+        r.seen += 1;
+        if r.items.len() < HOUR_RESERVOIR {
+            r.items.push(v);
+        } else {
+            let j = rng.gen_range(0..r.seen) as usize;
+            if j < HOUR_RESERVOIR {
+                r.items[j] = v;
+            }
+        }
     }
 
-    /// Train (or retrain) from the ring buffer. Call inside `block_in_place`.
-    pub fn train(&mut self) -> anyhow::Result<()> {
-        let data: Vec<Vec<f64>> = self.buffer.iter().cloned().collect();
+    pub fn samples_collected(&self) -> usize {
+        self.hours.iter().map(|h| h.items.len()).sum()
+    }
+
+    fn warm(&self, now: u64) -> bool {
+        self.samples_collected() >= WARMUP_SAMPLES
+            && self
+                .first_ts
+                .is_some_and(|t| now.saturating_sub(t) >= WARMUP_SECS)
+    }
+
+    pub fn should_train(&self, now: u64) -> bool {
+        self.warm(now)
+            && (self.forest.is_none() || now.saturating_sub(self.last_train_ts) >= RETRAIN_SECS)
+    }
+
+    /// Trains on the whole baseline and sets the threshold to the
+    /// `100 - alert_pct` percentile of the training scores. Call inside
+    /// `block_in_place`.
+    pub fn train(&mut self, now: u64, alert_pct: f64) {
+        let data: Vec<Vec<f64>> = self
+            .hours
+            .iter()
+            .flat_map(|h| h.items.iter().cloned())
+            .collect();
+        if data.is_empty() {
+            return;
+        }
         let mut rng = rand::thread_rng();
-        self.forest = Some(IsolationForestModel::build(&data, &mut rng));
-        Ok(())
+        let forest = IsolationForestModel::build(&data, &mut rng);
+        let mut scores: Vec<f64> = data.iter().map(|v| forest.score(v)).collect();
+        let pct = alert_pct.clamp(0.001, 50.0);
+        self.threshold = percentile_threshold(&mut scores, pct).max(MIN_THRESHOLD);
+        self.threshold_pct = 100.0 - pct;
+        self.forest = Some(forest);
+        self.last_train_ts = now;
     }
 
     /// Returns anomaly score [0,1] or `None` if not yet trained.
@@ -185,8 +254,71 @@ impl ExporterModel {
     pub fn is_ready(&self) -> bool {
         self.forest.is_some()
     }
+}
 
-    pub fn samples_collected(&self) -> usize {
-        self.buffer.len()
+/// Score that only the top `top_pct` percent of `scores` reach
+fn percentile_threshold(scores: &mut [f64], top_pct: f64) -> f64 {
+    scores.sort_unstable_by(f64::total_cmp);
+    let n = scores.len();
+    let idx = ((n as f64) * (1.0 - top_pct / 100.0)).ceil() as usize;
+    scores[idx.saturating_sub(1).min(n - 1)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vec_of(x: f64) -> Vec<f64> {
+        vec![x; 9]
+    }
+
+    // AC-04 (task 17.10)
+    #[test]
+    fn reservoir_is_bounded_per_hour_and_in_hours() {
+        let mut m = ExporterModel::new();
+        let mut rng = rand::thread_rng();
+        for i in 0..5_000u64 {
+            m.observe(vec_of(i as f64), 0, &mut rng);
+        }
+        assert_eq!(m.samples_collected(), HOUR_RESERVOIR);
+        for h in 1..=30u64 {
+            m.observe(vec_of(0.0), h * 3_600, &mut rng);
+        }
+        assert_eq!(m.hours.len(), HOURS_KEPT);
+    }
+
+    #[test]
+    fn needs_an_hour_and_enough_samples() {
+        let mut m = ExporterModel::new();
+        let mut rng = rand::thread_rng();
+        // 3 hours × 2 000 vectors: enough samples, spread over the hour cap
+        for i in 0..6_000u64 {
+            m.observe(vec_of(i as f64), 1_000 + (i / 2_000) * 3_600, &mut rng);
+        }
+        assert!(m.samples_collected() >= WARMUP_SAMPLES);
+        assert!(!m.should_train(1_000 + 1_800));
+        assert!(m.should_train(1_000 + WARMUP_SECS));
+    }
+
+    // AC-03 (task 17.10)
+    #[test]
+    fn threshold_is_the_requested_percentile() {
+        let mut scores: Vec<f64> = (1..=1000).map(|i| i as f64 / 1000.0).collect();
+        assert_eq!(percentile_threshold(&mut scores, 0.1), 0.999);
+        let mut scores: Vec<f64> = (1..=1000).map(|i| i as f64 / 1000.0).collect();
+        assert_eq!(percentile_threshold(&mut scores, 10.0), 0.9);
+    }
+
+    #[test]
+    fn trained_threshold_has_a_floor() {
+        let mut m = ExporterModel::new();
+        let mut rng = rand::thread_rng();
+        for i in 0..3_000u64 {
+            m.observe(vec_of((i % 7) as f64), 0, &mut rng);
+        }
+        m.train(10, 0.1);
+        assert!(m.is_ready());
+        assert!(m.threshold >= MIN_THRESHOLD);
+        assert!((m.threshold_pct - 99.9).abs() < 1e-9);
     }
 }
