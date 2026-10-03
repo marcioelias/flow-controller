@@ -104,11 +104,21 @@ impl LlmClient {
     }
 
     async fn generate(&self, prompt: &str) -> anyhow::Result<String> {
+        let mut options = serde_json::json!({ "num_predict": MAX_TOKENS, "temperature": 0.3 });
+        // Match the container's CPU quota (task 17.5 R-08): more threads than
+        // cores under a cgroup limit only adds contention
+        if let Some(n) = std::env::var("LLM_NUM_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| *n > 0)
+        {
+            options["num_thread"] = n.into();
+        }
         let body = serde_json::json!({
             "model":   self.model,
             "prompt":  prompt,
             "stream":  false,
-            "options": { "num_predict": MAX_TOKENS, "temperature": 0.3 }
+            "options": options
         });
 
         let resp: serde_json::Value = self

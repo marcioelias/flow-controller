@@ -40,6 +40,8 @@ services:
       - LLM_ENABLED=${LLM_ENABLED:-false}
       - LLM_ENDPOINT=${LLM_ENDPOINT:-http://ollama:11434}
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
+      # Threads pedidas ao Ollama = cota de CPU do container dele (task 17.5)
+      - LLM_NUM_THREADS=${OLLAMA_CPUS:-4}
     container_name: rust-collector
     depends_on:
       clickhouse:
@@ -86,6 +88,9 @@ services:
       resources:
         limits:
           memory: 4G
+          # Modelo em CPU satura todos os núcleos e disputa com coletor e
+          # ClickHouse; a cota preserva a coleta (task 17.5 R-08)
+          cpus: "${OLLAMA_CPUS:-4}"
 
   exabgp:
     image: pierky/exabgp:4.2.11

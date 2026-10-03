@@ -37,6 +37,10 @@ Causas encontradas:
 - **R-06** — `/api/ml/status` lê `llm_enabled`/`llm_model` do banco (fallback env).
 - **R-07** — UI: `pending` → "gerando…" com spinner; `failed` → "falhou: <erro>" +
   botão "Tentar de novo"; `disabled` → "IA desativada" com link para Configurações.
+- **R-08 — Cota de CPU do LLM.** Na homologação (03/10/2026) o Ollama em CPU ocupou
+  os 12 núcleos da VM continuamente (~25 s por explicação, ~4 anomalias/min chegando),
+  disputando com coletor e ClickHouse. O container do Ollama tem `cpus` limitado por
+  `OLLAMA_CPUS` (padrão 4) e o coletor pede `num_thread` igual (`LLM_NUM_THREADS`).
 
 ## Dados
 
