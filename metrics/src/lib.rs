@@ -13,6 +13,8 @@ pub struct CollectorMetrics {
     pub parse_errors: IntCounter,
     /// Flow records successfully decoded
     pub flows_decoded: IntCounter,
+    /// Data sets dropped because their template was not known yet
+    pub data_sets_without_template: IntCounter,
     /// Aggregation windows dropped because the export queue was full
     pub export_windows_dropped: IntCounter,
     /// Feature batches dropped because the ML queue was full
@@ -85,6 +87,11 @@ impl CollectorMetrics {
             &registry,
             "flows_decoded_total",
             "Total raw flow records successfully decoded",
+        );
+        let data_sets_without_template = counter(
+            &registry,
+            "data_sets_without_template_total",
+            "Data sets dropped because their template was not known yet",
         );
         let export_windows_dropped = counter(
             &registry,
@@ -174,6 +181,7 @@ impl CollectorMetrics {
             packets_dropped,
             parse_errors,
             flows_decoded,
+            data_sets_without_template,
             export_windows_dropped,
             ml_windows_dropped,
             clickhouse_insert_errors,

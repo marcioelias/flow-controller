@@ -11,14 +11,14 @@ pub struct TemplateKey {
 }
 
 /// Internal struct mapping Netflow fields to our NormalizedFlow
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateField {
     pub field_type: u16,
     pub length: u16,
 }
 
 /// A parsed template representing a schema for a flow record
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Template {
     pub key: TemplateKey,
     pub fields: Vec<TemplateField>,
@@ -43,6 +43,10 @@ pub struct ThreadLocalTemplateCache {
     /// systemInitTimeMilliseconds (IE 160) por (exporter, domain) — base para
     /// converter flowStart/EndSysUpTime (IE 21/22) em unix ms no IPFIX
     sys_inits: HashMap<(Ipv4Addr, u32), u64, RandomState>,
+    /// Decode state changed since the last `take_changed` (task 17.13)
+    changed: bool,
+    /// Data sets dropped because their template is unknown
+    missing_template: u64,
 }
 
 impl Default for ThreadLocalTemplateCache {
@@ -57,6 +61,8 @@ impl ThreadLocalTemplateCache {
             cache: HashMap::with_hasher(RandomState::new()),
             sampling_rates: HashMap::with_hasher(RandomState::new()),
             sys_inits: HashMap::with_hasher(RandomState::new()),
+            changed: false,
+            missing_template: 0,
         }
     }
 
@@ -75,6 +81,7 @@ impl ThreadLocalTemplateCache {
         let rate = rate.max(1);
         let prev = self.sampling_rates.insert((exporter_ip, source_id), rate);
         if prev != Some(rate) {
+            self.changed = true;
             tracing::info!(
                 "Sampling rate for exporter {} (domain {}): 1:{}",
                 exporter_ip,
@@ -94,7 +101,15 @@ impl ThreadLocalTemplateCache {
     }
 
     pub fn set_sys_init_ms(&mut self, exporter_ip: Ipv4Addr, source_id: u32, ms: u64) {
-        self.sys_inits.insert((exporter_ip, source_id), ms);
+        let prev = self.sys_inits.insert((exporter_ip, source_id), ms);
+        // Derived from export time − uptime: ignore millisecond jitter
+        if prev.is_none_or(|p| p.abs_diff(ms) > 1_000) {
+            self.changed = true;
+        }
+    }
+
+    pub fn sys_inits(&self) -> impl Iterator<Item = (&(Ipv4Addr, u32), &u64)> {
+        self.sys_inits.iter()
     }
 
     pub fn get(&self, key: &TemplateKey) -> Option<&Template> {
@@ -106,7 +121,56 @@ impl ThreadLocalTemplateCache {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        // Periodic identical resends refresh the timestamp but aren't a change
+        let same = self.cache.get(&template.key).is_some_and(|t| {
+            t.fields == template.fields
+                && t.is_options == template.is_options
+                && t.scope_field_count == template.scope_field_count
+        });
+        if !same {
+            self.changed = true;
+        }
         self.cache.insert(template.key, template);
+    }
+
+    /// Loads persisted state without marking it as a change (task 17.13 R-02)
+    pub fn restore(
+        &mut self,
+        templates: Vec<Template>,
+        sampling: Vec<((Ipv4Addr, u32), u32)>,
+        sys_inits: Vec<((Ipv4Addr, u32), u64)>,
+    ) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        for mut t in templates {
+            t.timestamp = now;
+            self.cache.entry(t.key).or_insert(t);
+        }
+        for (k, rate) in sampling {
+            self.sampling_rates.entry(k).or_insert(rate.max(1));
+        }
+        for (k, ms) in sys_inits {
+            self.sys_inits.entry(k).or_insert(ms);
+        }
+    }
+
+    pub fn templates(&self) -> impl Iterator<Item = &Template> {
+        self.cache.values()
+    }
+
+    /// True once per change of templates, sampling rates or boot times
+    pub fn take_changed(&mut self) -> bool {
+        std::mem::take(&mut self.changed)
+    }
+
+    pub fn note_missing_template(&mut self) {
+        self.missing_template += 1;
+    }
+
+    pub fn take_missing_templates(&mut self) -> u64 {
+        std::mem::take(&mut self.missing_template)
     }
 
     pub fn prune_old_templates(&mut self, current_time: u64, max_age_secs: u64) {
@@ -120,5 +184,68 @@ impl ThreadLocalTemplateCache {
 
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn template(len: u16) -> Template {
+        Template {
+            key: TemplateKey {
+                exporter_ip: Ipv4Addr::new(10, 0, 0, 1),
+                source_id: 1,
+                template_id: 300,
+            },
+            fields: vec![TemplateField {
+                field_type: 8,
+                length: len,
+            }],
+            is_options: false,
+            scope_field_count: 0,
+            timestamp: 0,
+        }
+    }
+
+    // AC-02 (task 17.13)
+    #[test]
+    fn identical_resend_is_not_a_change() {
+        let mut c = ThreadLocalTemplateCache::new();
+        c.insert(template(4));
+        assert!(c.take_changed());
+        c.insert(template(4));
+        assert!(!c.take_changed());
+        c.insert(template(16));
+        assert!(c.take_changed());
+    }
+
+    #[test]
+    fn restore_does_not_mark_change_nor_override_live_state() {
+        let mut c = ThreadLocalTemplateCache::new();
+        let ip = Ipv4Addr::new(10, 0, 0, 1);
+        c.set_sampling_rate(ip, 1, 1000);
+        c.take_changed();
+        c.restore(
+            vec![template(4)],
+            vec![((ip, 1), 64), ((ip, 2), 1000)],
+            vec![],
+        );
+        assert!(!c.take_changed());
+        assert_eq!(c.sampling_rate(ip, 1), 1000);
+        assert_eq!(c.sampling_rate(ip, 2), 1000);
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn boot_time_jitter_is_ignored() {
+        let mut c = ThreadLocalTemplateCache::new();
+        let ip = Ipv4Addr::new(10, 0, 0, 1);
+        c.set_sys_init_ms(ip, 1, 1_000_000);
+        assert!(c.take_changed());
+        c.set_sys_init_ms(ip, 1, 1_000_400);
+        assert!(!c.take_changed());
+        c.set_sys_init_ms(ip, 1, 2_000_000);
+        assert!(c.take_changed());
     }
 }

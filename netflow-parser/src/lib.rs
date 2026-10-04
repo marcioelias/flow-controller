@@ -755,7 +755,10 @@ fn handle_data_set(
             flows.append(&mut data_flows);
             return;
         }
-        None => return,
+        None => {
+            templates.note_missing_template();
+            return;
+        }
     };
 
     if let Some(rate) = learned_rate {

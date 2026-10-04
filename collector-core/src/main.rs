@@ -21,6 +21,7 @@ mod settings;
 mod stats;
 mod system_health;
 mod telegram;
+mod template_store;
 
 const APP_VERSION: &str = env!("APP_VERSION");
 const APP_NAME: &str = "FlowVision";
@@ -428,6 +429,7 @@ const EXPORT_FLUSH_SECS: u64 = 5;
 const EXPORT_MAX_ROWS: usize = 500_000;
 // Well beyond any standard template refresh interval (v9 default is minutes)
 const TEMPLATE_MAX_AGE_SECS: u64 = 3600;
+const TEMPLATE_PERSIST_REFRESH_SECS: u64 = 3600;
 // Debug Console is a sampled view: matches the consumer-side rate limit so the
 // worker never pays for strings the socket would discard anyway
 const DEBUG_MIN_INTERVAL: Duration = Duration::from_millis(10);
@@ -1086,6 +1088,20 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Decode state from the previous run (task 17.13): templates and sampling
+    // rates are known before the first packet arrives
+    let state_path = template_store::state_path();
+    let saved_state = template_store::load(&state_path, unix_now_secs() as u64);
+    match &saved_state {
+        Some(s) => tracing::info!(
+            "Template state loaded from {} ({})",
+            state_path.display(),
+            template_store::summary(s)
+        ),
+        None => tracing::info!("No template state at {}", state_path.display()),
+    }
+    let store_tx = template_store::spawn_writer(state_path, saved_state.clone());
+
     // Pre-allocate channels for N workers
     let mut worker_senders = Vec::new();
     let mut worker_threads = Vec::new();
@@ -1098,9 +1114,21 @@ fn main() -> anyhow::Result<()> {
         let exp_tx = export_tx.clone();
         let dbg_tx = debug_tx.clone();
         let worker_metrics = collector_metrics.clone();
+        let worker_state = saved_state.clone();
+        let worker_store = store_tx.clone();
         let handle = thread::Builder::new()
             .name(format!("worker-{}", worker_id))
-            .spawn(move || worker_loop(worker_id, rx, exp_tx, dbg_tx, worker_metrics))?;
+            .spawn(move || {
+                worker_loop(
+                    worker_id,
+                    rx,
+                    exp_tx,
+                    dbg_tx,
+                    worker_metrics,
+                    worker_state,
+                    worker_store,
+                )
+            })?;
 
         worker_threads.push(handle);
     }
@@ -1230,10 +1258,16 @@ fn worker_loop(
     export_tx: Sender<FlowWindow>,
     debug_tx: broadcast::Sender<DebugFlow>,
     worker_metrics: Arc<metrics::CollectorMetrics>,
+    saved_state: Option<template_store::DecodeState>,
+    store_tx: Sender<(usize, template_store::DecodeState)>,
 ) {
     tracing::info!("Worker {} started", id);
 
     let mut templates = ThreadLocalTemplateCache::new();
+    if let Some(state) = &saved_state {
+        template_store::apply(state, &mut templates);
+    }
+    let mut last_persist = Instant::now();
     let mut aggregator = ThreadLocalAggregator::new();
     // (soma_ms, n) do atraso flowEnd→chegada por exporter na janela do flush
     let mut lag_acc: std::collections::HashMap<Ipv4Addr, (u64, u32)> =
@@ -1318,6 +1352,17 @@ fn worker_loop(
             // Live exporters resend templates periodically, refreshing their
             // insert timestamp — only abandoned entries age out here.
             templates.prune_old_templates(unix_now_secs() as u64, TEMPLATE_MAX_AGE_SECS);
+            worker_metrics
+                .data_sets_without_template
+                .inc_by(templates.take_missing_templates());
+            // Persist on change, and hourly so "last seen" stays fresh (17.13)
+            if templates.take_changed()
+                || (last_persist.elapsed() >= Duration::from_secs(TEMPLATE_PERSIST_REFRESH_SECS)
+                    && !templates.is_empty())
+            {
+                let _ = store_tx.send((id, template_store::snapshot(&templates)));
+                last_persist = Instant::now();
+            }
             worker_metrics
                 .template_cache_size
                 .with_label_values(&[&id.to_string()])
