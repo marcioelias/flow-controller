@@ -70,8 +70,9 @@ const liveTotalBps = ref(0)
 // a que pertencem — inclusive retroativamente, conforme flows expiram no
 // exporter. Taxa real, não arrival (task 13.6).
 // Janela global vive no composable — sobrevive à troca de views (task 13.10).
-// O modo por dispositivo é a exceção: buffer local, reinicia ao navegar.
-// O global conta só a borda; BNG/CGNAT somam o per_device das caixas do papel (task 17.9 R-05).
+// O modo por dispositivo usa buffer local (reinicia ao navegar), alimentado pelas
+// fatias por caixa — mesma taxa real e divisão IPv4/IPv6 do global (task 17.12).
+// O global conta só a borda; BNG/CGNAT somam as caixas do papel (task 17.9 R-05).
 const { buckets: liveBuckets, subscribe } = useLiveTraffic()
 const globalLive = computed(() => selectedDevice.value === DEFAULT_DEVICE)
 const liveDeviceIps = computed(() => {
@@ -159,7 +160,7 @@ const { sorted: sortedExporterStats, sort: exporterSort } = useSort(() => export
 function selectDevice(value: DeviceValue) {
   selectedDevice.value = value
   deviceBuckets.clear()
-  famFilter.value = globalLive.value ? 'all' : 'v4' // slots v4 = par único quando filtrado por device
+  famFilter.value = 'all'
   loadOverview()
   loadProtocolStats()
   loadTopTalkers()
@@ -331,21 +332,26 @@ let overviewTimer: any = null
 
 function onLiveMessage(stats: any) {
   if (globalLive.value) return
-  // Fatias são globais; por dispositivo o payload é agregado (arrival-based,
-  // sem split de família) — slots v4 funcionam como par único in/out
-  const sec = stats.timestamp_sec
-  let inB = 0
-  let outB = 0
+  // Fatias por caixa caem no segundo real a que pertencem (retroativo)
+  const first = Math.floor(Date.now() / 1000) - LIVE_WINDOW_SECS
   for (const ip of liveDeviceIps.value) {
-    inB += stats.per_device_in?.[ip] ?? 0
-    outB += stats.per_device_out?.[ip] ?? 0
-  }
-  const b = deviceBuckets.get(sec)
-  if (b) {
-    b.v4i += inB
-    b.v4o += outB
-  } else {
-    deviceBuckets.set(sec, { v4i: inB, v4o: outB, v6i: 0, v6o: 0 })
+    for (const sl of stats.device_slices?.[ip] ?? []) {
+      if (sl.sec < first) continue
+      const b = deviceBuckets.get(sl.sec)
+      if (b) {
+        b.v4i += sl.v4_in ?? 0
+        b.v4o += sl.v4_out ?? 0
+        b.v6i += sl.v6_in ?? 0
+        b.v6o += sl.v6_out ?? 0
+      } else {
+        deviceBuckets.set(sl.sec, {
+          v4i: sl.v4_in ?? 0,
+          v4o: sl.v4_out ?? 0,
+          v6i: sl.v6_in ?? 0,
+          v6o: sl.v6_out ?? 0,
+        })
+      }
+    }
   }
 }
 
@@ -553,7 +559,7 @@ onUnmounted(() => {
               </p>
             </div>
             <div class="flex items-center gap-3">
-              <div v-if="globalLive" class="flex rounded-md border border-zinc-800 overflow-hidden text-xs">
+              <div class="flex rounded-md border border-zinc-800 overflow-hidden text-xs">
                 <button
                   v-for="opt in [
                     { v: 'all', label: 'Todos' },

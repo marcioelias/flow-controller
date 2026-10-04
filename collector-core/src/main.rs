@@ -106,6 +106,21 @@ pub struct LiveFlowStats {
     pub per_device_out: std::collections::HashMap<String, u64>,
     /// Fatias por segundo (globais) — taxa real, não arrival
     pub slices: Vec<LiveSlice>,
+    /// Mesmas fatias por exporter, com família (task 17.12)
+    pub device_slices: std::collections::HashMap<String, Vec<LiveSlice>>,
+}
+
+fn to_live_slices(totals: std::collections::BTreeMap<u32, [u64; 4]>) -> Vec<LiveSlice> {
+    totals
+        .into_iter()
+        .map(|(sec, t)| LiveSlice {
+            sec,
+            v4_in: t[0],
+            v4_out: t[1],
+            v6_in: t[2],
+            v6_out: t[3],
+        })
+        .collect()
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -892,6 +907,10 @@ fn main() -> anyhow::Result<()> {
                     // [v4_in, v4_out, v6_in, v6_out] — sem direção conta como entrada
                     let mut slice_totals: std::collections::BTreeMap<u32, [u64; 4]> =
                         std::collections::BTreeMap::new();
+                    let mut device_slices: std::collections::HashMap<
+                        Ipv4Addr,
+                        std::collections::BTreeMap<u32, [u64; 4]>,
+                    > = std::collections::HashMap::new();
                     // Which directions each exporter reported this window —
                     // both = totals would double-count if simply summed
                     let mut dir_seen: std::collections::HashMap<Ipv4Addr, (bool, bool)> =
@@ -903,11 +922,18 @@ fn main() -> anyhow::Result<()> {
                         if border {
                             window_total_bytes += m.bytes;
                         }
-                        if live_wanted && border {
-                            let t = slice_totals.entry(*slice_sec).or_default();
+                        if live_wanted {
                             let v6 = matches!(key.src_ip, flow_types::IpAddrType::V6(_));
                             let out = key.direction == flow_types::DIRECTION_EGRESS;
-                            t[usize::from(v6) * 2 + usize::from(out)] += m.bytes;
+                            let slot = usize::from(v6) * 2 + usize::from(out);
+                            if border {
+                                slice_totals.entry(*slice_sec).or_default()[slot] += m.bytes;
+                            }
+                            device_slices
+                                .entry(key.exporter_ip)
+                                .or_default()
+                                .entry(*slice_sec)
+                                .or_default()[slot] += m.bytes;
                         }
                         if live_wanted {
                             *per_device_bytes
@@ -972,15 +998,10 @@ fn main() -> anyhow::Result<()> {
                         per_device: per_device_bytes,
                         per_device_in,
                         per_device_out,
-                        slices: slice_totals
+                        slices: to_live_slices(slice_totals),
+                        device_slices: device_slices
                             .into_iter()
-                            .map(|(sec, t)| LiveSlice {
-                                sec,
-                                v4_in: t[0],
-                                v4_out: t[1],
-                                v6_in: t[2],
-                                v6_out: t[3],
-                            })
+                            .map(|(ip, totals)| (ip.to_string(), to_live_slices(totals)))
                             .collect(),
                     });
 
