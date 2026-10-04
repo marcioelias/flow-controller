@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { safeRedirect } from '../lib/sessionGuard'
 
 const router = useRouter()
+const route = useRoute()
+const expired = route.query.expired === '1'
 const authStore = useAuthStore()
 
 const username = ref('')
@@ -18,7 +21,7 @@ async function handleLogin() {
 
   try {
     await authStore.login(username.value, password.value)
-    router.push('/dashboard')
+    router.push(safeRedirect(route.query.redirect))
   } catch (e) {
     error.value = 'Usuário ou senha inválidos'
   } finally {
@@ -62,6 +65,10 @@ async function handleLogin() {
               class="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               placeholder="Digite sua senha"
             />
+          </div>
+
+          <div v-if="expired && !error" class="text-amber-400 text-sm">
+            Sua sessão expirou. Entre novamente.
           </div>
 
           <div v-if="error" class="text-red-400 text-sm">

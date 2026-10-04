@@ -197,7 +197,10 @@ const router = createRouter({
 router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore()
 
-  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+  if (to.meta.requiresAuth && authStore.isAuthenticated && authStore.tokenExpired()) {
+    authStore.logout()
+    next({ path: '/login', query: { expired: '1', redirect: to.fullPath } })
+  } else if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next('/login')
   } else if (to.meta.requiresAdmin && !authStore.isAdmin) {
     next('/dashboard')  // Redirect non-admins to dashboard

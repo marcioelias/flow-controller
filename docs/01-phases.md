@@ -392,7 +392,7 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 | 17.8 Campos de NAT (post-NAT) do NetFlow v9 / IPFIX | `tasks/task-17.8-nat-fields.md` | ✅ |
 | 17.9 Papel do exportador (borda, BNG, CGNAT) | `tasks/task-17.9-exporter-roles.md` | ✅ |
 | 17.10 ML: janelas de 1 minuto, baseline de 24 h, persistência e limiar por percentil | `tasks/task-17.10-ml-minute-windows.md` | ✅ |
-| 17.11 Sessão expirada leva ao login | `tasks/task-17.11-session-expiry.md` | 🔲 |
+| 17.11 Sessão expirada leva ao login | `tasks/task-17.11-session-expiry.md` | ✅ |
 
 ---
 

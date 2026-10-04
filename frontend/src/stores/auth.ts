@@ -24,6 +24,17 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Computed
   const isAuthenticated = computed(() => !!token.value)
+
+  /** True when the JWT's `exp` is in the past (task 17.11 R-02) */
+  function tokenExpired(now = Date.now()): boolean {
+    if (!token.value) return true
+    try {
+      const payload = JSON.parse(atob(token.value.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+      return typeof payload.exp === 'number' && payload.exp * 1000 <= now
+    } catch {
+      return false
+    }
+  }
   const isAdmin = computed(() => user.value?.is_admin ?? false)
 
   // Actions
@@ -65,6 +76,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     login,
     logout,
+    tokenExpired,
     getAuthHeaders,
   }
 })
