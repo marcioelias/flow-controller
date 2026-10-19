@@ -140,7 +140,7 @@ impl Tuning {
 }
 
 /// Learned sampling rate per exporter (max over observation domains)
-fn sampling_rates(state: &AppState) -> HashMap<String, f64> {
+pub(crate) fn sampling_rates(state: &AppState) -> HashMap<String, f64> {
     let mut rates = HashMap::new();
     for family in state.metrics.registry.gather() {
         if family.name() != "exporter_sampling_rate" {

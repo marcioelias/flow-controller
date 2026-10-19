@@ -24,6 +24,10 @@ pub async fn run_detector(state: Arc<AppState>) {
                 tracing::warn!("Rule '{}' eval error: {e}", rule.name);
             }
         }
+
+        if let Err(e) = eval_routing_loops(&state).await {
+            tracing::warn!("Routing loop check error: {e}");
+        }
     }
 }
 
@@ -425,5 +429,246 @@ async fn auto_bgp_announce(
             }
         }
         Err(e) => tracing::warn!("Auto BGP announce for {src_ip} failed: {e}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Routing loop (ping-pong) detector — task 17.15
+// ---------------------------------------------------------------------------
+
+/// Consecutive suspicious minutes needed to alert (R-02)
+const LOOP_MINUTES: usize = 5;
+const LOOP_COOLDOWN_MIN: i64 = 60;
+
+/// Rows of a raw ClickHouse JSON query (UInt64 comes quoted)
+async fn ch_rows(url: &str, sql: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    let resp = reqwest::Client::new()
+        .post(url)
+        .query(&[("default_format", "JSON")])
+        .body(sql.to_string())
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    Ok(resp["data"].as_array().cloned().unwrap_or_default())
+}
+
+fn num(v: &serde_json::Value) -> f64 {
+    match v {
+        serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        serde_json::Value::String(s) => s.parse().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+/// SQL for the two loop signals per exporter, destination and minute (R-01):
+/// traffic that leaves through the interface it came in, and ICMP TTL exceeded
+fn loop_signal_sql(table: &str) -> String {
+    format!(
+        "SELECT toString(exporter_ip) AS exporter, toString(dst_ip) AS dst, \
+                toUnixTimestamp(toStartOfMinute(timestamp)) AS minute, \
+                sumIf(packets, in_if = out_if AND in_if != 0) AS hairpin, \
+                sumIf(packets, (protocol = 1 AND intDiv(dst_port, 256) = 11) \
+                            OR (protocol = 58 AND intDiv(dst_port, 256) = 3)) AS ttl_exceeded \
+         FROM {table} \
+         WHERE timestamp >= toStartOfMinute(now()) - INTERVAL {LOOP_MINUTES} MINUTE \
+           AND timestamp < toStartOfMinute(now()) \
+         GROUP BY exporter, dst, minute \
+         HAVING hairpin > 0 OR ttl_exceeded > 0"
+    )
+}
+
+/// (exporter, destination) pairs suspicious in every one of the last minutes
+fn persistent_loops(
+    rows: &[serde_json::Value],
+    rates: &std::collections::HashMap<String, f64>,
+    min_samples: f64,
+) -> Vec<(String, String)> {
+    let mut minutes: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    for r in rows {
+        let exporter = r["exporter"].as_str().unwrap_or_default().to_string();
+        let rate = rates.get(&exporter).copied().unwrap_or(1.0);
+        let sampled = num(&r["hairpin"]).max(num(&r["ttl_exceeded"])) / rate;
+        if sampled >= min_samples {
+            let dst = r["dst"].as_str().unwrap_or_default().to_string();
+            *minutes.entry((exporter, dst)).or_default() += 1;
+        }
+    }
+    let mut out: Vec<_> = minutes
+        .into_iter()
+        .filter(|(_, n)| *n >= LOOP_MINUTES)
+        .map(|(k, _)| k)
+        .collect();
+    out.sort();
+    out
+}
+
+async fn loop_fired_recently(state: &AppState, exporter: &str, dst: &str) -> anyhow::Result<bool> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM alert_events
+         WHERE alert_type = 'routing_loop' AND exporter_ip = ? AND src_ip = ?
+           AND created_at >= datetime('now', '-' || ? || ' minutes')",
+    )
+    .bind(exporter)
+    .bind(dst)
+    .bind(LOOP_COOLDOWN_MIN)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(n > 0)
+}
+
+async fn eval_routing_loops(state: &AppState) -> anyhow::Result<()> {
+    let setting = |k: &'static str| crate::settings::get_value(&state.db, k);
+    if setting("LOOP_DETECTOR_ENABLED").await.as_deref() == Some("false") {
+        return Ok(());
+    }
+    let min_samples: f64 = setting("LOOP_MIN_SAMPLES")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100.0);
+
+    let url = &state.clickhouse_url;
+    let mut rows = ch_rows(url, &loop_signal_sql("network_flows_v4")).await?;
+    rows.extend(ch_rows(url, &loop_signal_sql("network_flows_v6")).await?);
+    let rates = crate::ml_runner::sampling_rates(state);
+
+    for (exporter, dst) in persistent_loops(&rows, &rates, min_samples) {
+        if loop_fired_recently(state, &exporter, &dst).await? {
+            continue;
+        }
+        let Ok(dst_ip) = dst.parse::<std::net::IpAddr>() else {
+            continue;
+        };
+        let Ok(exp_ip) = exporter.parse::<std::net::IpAddr>() else {
+            continue;
+        };
+        let (table, dst_lit, zero) = match dst_ip {
+            std::net::IpAddr::V4(a) => (
+                "network_flows_v4",
+                format!("toIPv4('{a}')"),
+                "toIPv4('0.0.0.0')",
+            ),
+            std::net::IpAddr::V6(a) => {
+                ("network_flows_v6", format!("toIPv6('{a}')"), "toIPv6('::')")
+            }
+        };
+        let window = format!(
+            "timestamp >= toStartOfMinute(now()) - INTERVAL {LOOP_MINUTES} MINUTE \
+             AND timestamp < toStartOfMinute(now())"
+        );
+        let detail_sql = format!(
+            "SELECT groupUniqArrayIf(4)(concat(toString(in_if), '→', toString(out_if)), in_if != 0) AS ifaces, \
+                    toString(anyIf(next_hop, next_hop != {zero})) AS next_hop, \
+                    topK(3)(toString(src_ip)) AS sources, \
+                    sum(packets) AS pkts, sum(bytes) AS bytes, \
+                    sumIf(packets, (protocol = 1 AND intDiv(dst_port, 256) = 11) \
+                                OR (protocol = 58 AND intDiv(dst_port, 256) = 3)) AS ttl_pkts, \
+                    (SELECT sum(bytes) FROM {table} WHERE exporter_ip = '{exp_ip}' AND fwd_status < 128 AND {window}) AS exporter_bytes \
+             FROM {table} \
+             WHERE exporter_ip = '{exp_ip}' AND dst_ip = {dst_lit} AND {window} \
+               AND ((in_if = out_if AND in_if != 0) \
+                    OR (protocol = 1 AND intDiv(dst_port, 256) = 11) \
+                    OR (protocol = 58 AND intDiv(dst_port, 256) = 3))"
+        );
+        let Some(d) = ch_rows(url, &detail_sql).await?.into_iter().next() else {
+            continue;
+        };
+        let list = |v: &serde_json::Value| {
+            v.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default()
+        };
+        let secs = (LOOP_MINUTES * 60) as f64;
+        let pps = num(&d["pkts"]) / secs;
+        let share = if num(&d["exporter_bytes"]) > 0.0 {
+            num(&d["bytes"]) / num(&d["exporter_bytes"]) * 100.0
+        } else {
+            0.0
+        };
+        let ifaces = list(&d["ifaces"]);
+        let next_hop = d["next_hop"].as_str().unwrap_or_default();
+        let ttl_pct = if num(&d["pkts"]) > 0.0 {
+            num(&d["ttl_pkts"]) / num(&d["pkts"]) * 100.0
+        } else {
+            0.0
+        };
+        let message = format!(
+            "Possível loop de roteamento para {dst} há {LOOP_MINUTES} min: ~{pps:.0} pps \
+             ({share:.1}% do tráfego do exportador), {ttl_pct:.0}% ICMP TTL expirado; \
+             interfaces {}{}; origens mais frequentes: {}",
+            if ifaces.is_empty() {
+                "—".to_string()
+            } else {
+                ifaces
+            },
+            if next_hop.is_empty() || next_hop == "0.0.0.0" || next_hop == "::" {
+                String::new()
+            } else {
+                format!(" via {next_hop}")
+            },
+            list(&d["sources"]),
+        );
+        let event = AlertEvent {
+            id: None,
+            rule_id: None,
+            exporter_ip: exporter.clone(),
+            src_ip: dst.clone(),
+            alert_type: "routing_loop".to_string(),
+            severity: if share >= 10.0 {
+                AlertSeverity::Critical
+            } else {
+                AlertSeverity::Warning
+            },
+            message,
+            upload_bytes: None,
+            download_bytes: None,
+            pps: Some(pps),
+            avg_pkt_bytes: Some(num(&d["bytes"]) / num(&d["pkts"]).max(1.0)),
+            attack_ports: None,
+            notified: false,
+            bgp_announced: false,
+            created_at: None,
+        };
+        match alerts::insert_event(&state.db, &event).await {
+            Ok(id) => tracing::warn!("Routing loop alert #{id}: {dst} on {exporter}"),
+            Err(e) => tracing::warn!("Routing loop alert insert failed: {e}"),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod loop_tests {
+    use super::*;
+
+    fn row(exporter: &str, dst: &str, minute: u64, hairpin: u64, ttl: u64) -> serde_json::Value {
+        serde_json::json!({
+            "exporter": exporter, "dst": dst, "minute": minute,
+            "hairpin": hairpin.to_string(), "ttl_exceeded": ttl.to_string(),
+        })
+    }
+
+    // AC-01 / AC-02 (task 17.15)
+    #[test]
+    fn needs_every_minute_above_the_floor() {
+        let rates: std::collections::HashMap<String, f64> =
+            [("10.0.0.1".to_string(), 1000.0)].into_iter().collect();
+        let mut rows: Vec<_> = (0..5)
+            .map(|m| row("10.0.0.1", "170.231.6.0", m * 60, 150_000, 0))
+            .collect();
+        // 4 good minutes + 1 below the floor: not persistent
+        rows.extend((0..4).map(|m| row("10.0.0.1", "170.231.7.0", m * 60, 0, 150_000)));
+        rows.push(row("10.0.0.1", "170.231.7.0", 240, 0, 50_000));
+        assert_eq!(
+            persistent_loops(&rows, &rates, 100.0),
+            vec![("10.0.0.1".to_string(), "170.231.6.0".to_string())]
+        );
     }
 }

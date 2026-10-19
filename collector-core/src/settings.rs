@@ -47,6 +47,8 @@ const KNOWN_KEYS: &[&str] = &[
     "ML_MIN_BPS",
     "ML_MIN_SAMPLES",
     "ML_ALERT_PERCENTILE",
+    "LOOP_DETECTOR_ENABLED",
+    "LOOP_MIN_SAMPLES",
     "LLM_ENABLED",
     "LLM_ENDPOINT",
     "LLM_MODEL",
@@ -201,6 +203,23 @@ pub async fn init_settings_table(pool: &SqlitePool) -> anyhow::Result<()> {
             "Com amostragem (ex.: 1:1000) um único pacote sorteado vira 1000 pps; \
              o ML só avalia o minuto de um IP com pelo menos este número de \
              pacotes realmente amostrados.",
+            "IA",
+        ),
+        (
+            "LOOP_DETECTOR_ENABLED",
+            "true",
+            "Detector de loop de roteamento",
+            "Alerta quando um destino recebe, por 5 minutos seguidos, tráfego que entra e \
+             sai pela mesma interface ou ICMP TTL expirado — assinatura de pacotes indo e \
+             voltando entre roteadores.",
+            "IA",
+        ),
+        (
+            "LOOP_MIN_SAMPLES",
+            "100",
+            "Mínimo de amostras/min para loop",
+            "Pacotes realmente amostrados por minuto, para o mesmo destino, para contar \
+             aquele minuto como suspeito de loop.",
             "IA",
         ),
         (

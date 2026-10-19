@@ -396,7 +396,7 @@ Dependências: 13.1 → 13.2; 13.3, 13.4 e 13.5 independentes.
 | 17.12 Tempo real por dispositivo com IPv4/IPv6 e preenchimento retroativo | `tasks/task-17.12-live-device-family-split.md` | ✅ |
 | 17.13 Templates e amostragem sobrevivem ao reinício do coletor | `tasks/task-17.13-template-persistence.md` | ✅ |
 | 17.14 Interfaces, próximo salto e status de encaminhamento nos flows | `tasks/task-17.14-interfaces-and-forwarding-status.md` | ✅ |
-| 17.15 Detector de pingue-pongue (loop de roteamento) | `tasks/task-17.15-loop-detector.md` | 🔲 |
+| 17.15 Detector de pingue-pongue (loop de roteamento) | `tasks/task-17.15-loop-detector.md` | ✅ |
 | 17.16 ML ignora mensagens de erro ICMP | `tasks/task-17.16-ml-ignores-icmp-errors.md` | ✅ |
 
 ---

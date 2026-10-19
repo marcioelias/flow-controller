@@ -40,6 +40,7 @@ const TYPE_LABELS: Record<string, string> = {
   upload_inversion: 'Inversão de upload',
   attack_signature: 'Assinatura de ataque',
   ml_anomaly: 'Anomalia ML',
+  routing_loop: 'Loop de roteamento',
 }
 function typeLabel(t: string) {
   return TYPE_LABELS[t] ?? t
