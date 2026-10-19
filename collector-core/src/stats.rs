@@ -674,7 +674,10 @@ pub async fn get_exporter_summary_handler(
     Query(params): Query<ExporterSummaryQuery>,
 ) -> Result<Json<Vec<ExporterSummaryRow>>, StatusCode> {
     let minutes = params.minutes.unwrap_or(5).min(1440);
-    let time_filter = format!("WHERE timestamp >= now() - INTERVAL {} MINUTE", minutes);
+    let time_filter = format!(
+        "WHERE {FORWARDED} AND timestamp >= now() - INTERVAL {} MINUTE",
+        minutes
+    );
 
     let cols = "sum(bytes) AS total_bytes, sum(flow_count) AS flow_count, \
                 uniq(src_ip) AS unique_sources, \
@@ -1051,6 +1054,10 @@ pub struct TalkerConversation {
     pub peer_class: &'static str,
     /// Other side of the talker's NAT translation; empty without NAT (task 17.8)
     pub translated: String,
+    /// "in→out" interface pairs seen (task 17.14)
+    pub ifaces: Vec<String>,
+    /// Next hop seen for the conversation; empty when not exported
+    pub next_hop: String,
     pub protocol: u64,
     pub port: u64,
     pub up_bytes: u64,
@@ -1172,7 +1179,7 @@ pub async fn get_talker_handler(
             .map(|v| v.role.clone())
             .unwrap_or_else(|| crate::exporters::DEFAULT_ROLE.to_string()),
     };
-    let device = device_cond(&state.db, exporter, Some(&role)).await;
+    let device = device_scope(&state.db, exporter, Some(&role)).await;
     let classifier = crate::netclass::NetClassifier::load(&state.db).await;
     let peer_ip = format!("if({is_up}, if(nat_dst_ip != {zero}, nat_dst_ip, dst_ip), src_ip)");
     let peer_asn = format!("if({is_up}, dst_asn, src_asn)");
@@ -1204,6 +1211,8 @@ pub async fn get_talker_handler(
         "SELECT toString({peer_ip}) AS peer, \
                 {peer_asn} AS peer_asn, protocol, {port}, {up}, {down}, \
                 if({translated} = {zero}, '', toString({translated})) AS translated, \
+                groupUniqArray(4)(concat(toString(in_if), '→', toString(out_if))) AS ifaces, \
+                toString(anyIf(next_hop, next_hop != {zero})) AS next_hop, \
                 sum(packets) AS packets, \
                 toUnixTimestamp(min(timestamp)) AS first_seen, \
                 toUnixTimestamp(max(timestamp)) AS last_seen \
@@ -1255,6 +1264,21 @@ pub async fn get_talker_handler(
                 parse_u64_field(&r["peer_asn"]) as u32,
             ),
             translated: r["translated"].as_str().unwrap_or_default().to_string(),
+            ifaces: r["ifaces"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|v| *v != "0→0")
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            next_hop: r["next_hop"]
+                .as_str()
+                .filter(|v| !v.is_empty() && *v != "0.0.0.0" && *v != "::")
+                .unwrap_or_default()
+                .to_string(),
             protocol: parse_u64_field(&r["protocol"]),
             port: parse_u64_field(&r["port"]),
             up_bytes: parse_u64_field(&r["up_bytes"]),
@@ -1337,6 +1361,20 @@ fn complete_minutes_where(device: &str, minutes: u32) -> String {
 /// Device scope as a SQL condition (task 17.9 R-02): one exporter, or every
 /// enabled exporter of a role; border by default. Never sums across roles.
 async fn device_cond(
+    db: &sqlx::SqlitePool,
+    exporter_ip: Option<&str>,
+    role: Option<&str>,
+) -> String {
+    let scope = device_scope(db, exporter_ip, role).await;
+    format!("({scope} AND {FORWARDED})")
+}
+
+/// Dropped and consumed records (RFC 7270, top bits 10/11) stay stored as
+/// evidence but don't count as traffic in totals and rankings (task 17.14)
+const FORWARDED: &str = "fwd_status < 128";
+
+/// Device scope without the forwarding filter — for drill-down views
+async fn device_scope(
     db: &sqlx::SqlitePool,
     exporter_ip: Option<&str>,
     role: Option<&str>,

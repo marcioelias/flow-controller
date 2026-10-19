@@ -148,6 +148,9 @@ pub struct DebugFlow {
     pub nat_dst_ip: Option<String>,
     pub nat_src_port: u16,
     pub nat_dst_port: u16,
+    /// Task 17.14
+    pub next_hop: Option<String>,
+    pub fwd_status: u8,
 }
 
 fn ip_type_to_string(ip: flow_types::IpAddrType) -> String {
@@ -920,7 +923,9 @@ fn main() -> anyhow::Result<()> {
                     for ((slice_sec, key), m) in map.iter() {
                         // Global live totals count border exporters only, so
                         // the same packet seen by BNG/CGNAT isn't summed (17.9)
-                        let border = live_border.contains(&key.exporter_ip);
+                        // Dropped/consumed records aren't traffic (task 17.14)
+                        let border = live_border.contains(&key.exporter_ip)
+                            && key.fwd_status < 128;
                         if border {
                             window_total_bytes += m.bytes;
                         }
@@ -931,11 +936,13 @@ fn main() -> anyhow::Result<()> {
                             if border {
                                 slice_totals.entry(*slice_sec).or_default()[slot] += m.bytes;
                             }
-                            device_slices
-                                .entry(key.exporter_ip)
-                                .or_default()
-                                .entry(*slice_sec)
-                                .or_default()[slot] += m.bytes;
+                            if key.fwd_status < 128 {
+                                device_slices
+                                    .entry(key.exporter_ip)
+                                    .or_default()
+                                    .entry(*slice_sec)
+                                    .or_default()[slot] += m.bytes;
+                            }
                         }
                         if live_wanted {
                             *per_device_bytes
@@ -1033,6 +1040,10 @@ fn main() -> anyhow::Result<()> {
                             nat_dst_ip: nat_v4(key.nat_dst_ip),
                             nat_src_port: key.nat_src_port,
                             nat_dst_port: key.nat_dst_port,
+                            in_if: key.in_if,
+                            out_if: key.out_if,
+                            next_hop: nat_v4(key.next_hop),
+                            fwd_status: key.fwd_status,
                             src_port: key.src_port,
                             dst_port: key.dst_port,
                             protocol: key.protocol,
@@ -1054,6 +1065,10 @@ fn main() -> anyhow::Result<()> {
                             nat_dst_ip: nat_v6(key.nat_dst_ip),
                             nat_src_port: key.nat_src_port,
                             nat_dst_port: key.nat_dst_port,
+                            in_if: key.in_if,
+                            out_if: key.out_if,
+                            next_hop: nat_v6(key.next_hop),
+                            fwd_status: key.fwd_status,
                             src_port: key.src_port,
                             dst_port: key.dst_port,
                             protocol: key.protocol,
@@ -1332,6 +1347,8 @@ fn worker_loop(
                                 nat_dst_ip: flow.nat_dst_ip.map(ip_type_to_string),
                                 nat_src_port: flow.nat_src_port,
                                 nat_dst_port: flow.nat_dst_port,
+                                next_hop: flow.next_hop.map(ip_type_to_string),
+                                fwd_status: flow.fwd_status,
                             });
                         }
                         if flow.end_ms > 0 {

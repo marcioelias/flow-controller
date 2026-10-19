@@ -25,6 +25,8 @@ interface DebugFlow {
   nat_dst_ip:    string | null
   nat_src_port:  number
   nat_dst_port:  number
+  next_hop:      string | null
+  fwd_status:    number
 }
 
 const MAX_FLOWS = 500
@@ -393,6 +395,15 @@ function protoColor(p: number): string {
               <div class="text-slate-200">{{ selected.egress_if || '—' }}</div>
               <div class="text-zinc-500">Flow Count</div>
               <div class="text-slate-200">{{ selected.flow_count }}</div>
+
+              <!-- Encaminhamento (task 17.14) -->
+              <div class="text-zinc-500">Próximo salto</div>
+              <div class="text-slate-200">{{ selected.next_hop ?? '—' }}</div>
+              <div class="text-zinc-500">Status (IE 89)</div>
+              <div :class="(selected.fwd_status >> 6) >= 2 ? 'text-red-400' : 'text-slate-200'">
+                {{ ['desconhecido', 'encaminhado', 'descartado', 'consumido'][selected.fwd_status >> 6] }}
+                <span class="text-zinc-600">(0x{{ selected.fwd_status.toString(16).padStart(2, '0') }})</span>
+              </div>
 
               <!-- Post-NAT (task 17.8) -->
               <div class="col-span-2 pb-1 mt-3 mb-1 border-b border-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">

@@ -107,6 +107,10 @@ pub struct NormalizedFlow {
     pub nat_dst_ip: Option<IpAddrType>,
     pub nat_src_port: u16,
     pub nat_dst_port: u16,
+    /// IE 15 / IE 62 (task 17.14)
+    pub next_hop: Option<IpAddrType>,
+    /// IE 89, RFC 7270: top 2 bits 0 unknown, 1 forwarded, 2 dropped, 3 consumed
+    pub fwd_status: u8,
 }
 
 pub const DIRECTION_INGRESS: u8 = 0;

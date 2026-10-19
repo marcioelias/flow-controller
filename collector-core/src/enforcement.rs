@@ -104,10 +104,10 @@ async fn measure_avg_bps(ch_url: &str, roles: &HashMap<String, String>) -> Optio
     let sql = format!(
         "SELECT exporter, sum(b) FROM ( \
            SELECT toString(exporter_ip) AS exporter, sum(bytes) AS b FROM network_flows_v4 \
-             WHERE timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND GROUP BY exporter \
+             WHERE fwd_status < 128 AND timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND GROUP BY exporter \
            UNION ALL \
            SELECT toString(exporter_ip) AS exporter, sum(bytes) AS b FROM network_flows_v6 \
-             WHERE timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND GROUP BY exporter) \
+             WHERE fwd_status < 128 AND timestamp > now() - INTERVAL {AVG_WINDOW_SECS} SECOND GROUP BY exporter) \
          GROUP BY exporter FORMAT TSV"
     );
     let client = reqwest::Client::builder()

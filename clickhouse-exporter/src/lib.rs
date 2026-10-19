@@ -25,6 +25,11 @@ pub struct NetworkFlowV4Row {
     pub nat_dst_ip: u32,
     pub nat_src_port: u16,
     pub nat_dst_port: u16,
+    /// Task 17.14: interfaces, next hop (0.0.0.0 if absent), RFC 7270 status
+    pub in_if: u32,
+    pub out_if: u32,
+    pub next_hop: u32,
+    pub fwd_status: u8,
 }
 
 /// Aggregated IPv6 flow. `[u8; 16]` maps onto a ClickHouse `IPv6` column.
@@ -49,6 +54,11 @@ pub struct NetworkFlowV6Row {
     pub nat_dst_ip: [u8; 16],
     pub nat_src_port: u16,
     pub nat_dst_port: u16,
+    /// Task 17.14: interfaces, next hop (:: if absent), RFC 7270 status
+    pub in_if: u32,
+    pub out_if: u32,
+    pub next_hop: [u8; 16],
+    pub fwd_status: u8,
 }
 
 pub struct ClickhouseExporter {
@@ -114,7 +124,11 @@ impl ClickhouseExporter {
                 nat_src_ip IPv4 DEFAULT toIPv4('0.0.0.0'),
                 nat_dst_ip IPv4 DEFAULT toIPv4('0.0.0.0'),
                 nat_src_port UInt16 DEFAULT 0,
-                nat_dst_port UInt16 DEFAULT 0
+                nat_dst_port UInt16 DEFAULT 0,
+                in_if UInt32 DEFAULT 0,
+                out_if UInt32 DEFAULT 0,
+                next_hop IPv4 DEFAULT toIPv4('0.0.0.0'),
+                fwd_status UInt8 DEFAULT 0
             )
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
@@ -144,7 +158,11 @@ impl ClickhouseExporter {
                 nat_src_ip IPv6 DEFAULT toIPv6('::'),
                 nat_dst_ip IPv6 DEFAULT toIPv6('::'),
                 nat_src_port UInt16 DEFAULT 0,
-                nat_dst_port UInt16 DEFAULT 0
+                nat_dst_port UInt16 DEFAULT 0,
+                in_if UInt32 DEFAULT 0,
+                out_if UInt32 DEFAULT 0,
+                next_hop IPv6 DEFAULT toIPv6('::'),
+                fwd_status UInt8 DEFAULT 0
             )
             ENGINE = MergeTree()
             PARTITION BY toYYYYMMDD(timestamp)
@@ -172,7 +190,7 @@ impl ClickhouseExporter {
             }
         }
 
-        // Post-NAT columns for installs created before task 17.8
+        // Post-NAT (17.8) and interface/status (17.14) columns for older installs
         let nat_columns = [
             ("network_flows_v4", "IPv4 DEFAULT toIPv4('0.0.0.0')"),
             ("network_flows_v6", "IPv6 DEFAULT toIPv6('::')"),
@@ -183,7 +201,11 @@ impl ClickhouseExporter {
                  ADD COLUMN IF NOT EXISTS nat_src_ip {ip_type}, \
                  ADD COLUMN IF NOT EXISTS nat_dst_ip {ip_type}, \
                  ADD COLUMN IF NOT EXISTS nat_src_port UInt16 DEFAULT 0, \
-                 ADD COLUMN IF NOT EXISTS nat_dst_port UInt16 DEFAULT 0"
+                 ADD COLUMN IF NOT EXISTS nat_dst_port UInt16 DEFAULT 0, \
+                 ADD COLUMN IF NOT EXISTS in_if UInt32 DEFAULT 0, \
+                 ADD COLUMN IF NOT EXISTS out_if UInt32 DEFAULT 0, \
+                 ADD COLUMN IF NOT EXISTS next_hop {ip_type}, \
+                 ADD COLUMN IF NOT EXISTS fwd_status UInt8 DEFAULT 0"
             );
             if let Err(e) = self.client.query(sql.as_str()).execute().await {
                 tracing::warn!("{table} post-NAT columns (non-fatal): {e}");

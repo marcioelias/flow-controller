@@ -43,6 +43,8 @@ interface Conversation {
   peer_asn: number
   peer_class: NetClass
   translated: string
+  ifaces: string[]
+  next_hop: string
   protocol: number
   port: number
   up_bytes: number
@@ -99,6 +101,7 @@ function setScope(v: Scope) {
   loadData()
 }
 // Assinante CGNAT falando com o próprio ASN: o destino final é resolvido no NAT
+const hasIfaces = computed(() => detail.value?.conversations.some((c) => c.ifaces.length > 0) ?? false)
 const hasTranslation = computed(() => detail.value?.conversations.some((c) => c.translated) ?? false)
 const showCgnatHint = computed(
   () =>
@@ -443,6 +446,7 @@ onUnmounted(() => {
                     <SortTh :sort="convSort" k="peer" class="px-4 py-2">Peer</SortTh>
                     <SortTh :sort="convSort" k="peer_asn" class="px-4 py-2">ASN</SortTh>
                     <SortTh v-if="hasTranslation" :sort="convSort" k="translated" class="px-4 py-2" title="Outro lado da tradução NAT deste IP">Tradução</SortTh>
+                    <th v-if="hasIfaces" class="px-4 py-2 font-medium" title="Índices de interface exportados (entrada → saída) e próximo salto">Interfaces</th>
                     <SortTh :sort="convSort" k="service" class="px-4 py-2">Serviço</SortTh>
                     <SortTh :sort="convSort" k="down_bytes" align="right" class="px-4 py-2">↓ Média</SortTh>
                     <SortTh :sort="convSort" k="up_bytes" align="right" class="px-4 py-2">↑ Média</SortTh>
@@ -465,6 +469,10 @@ onUnmounted(() => {
                       </span>
                     </td>
                     <td class="px-4 py-2 font-mono text-zinc-500">{{ c.peer_asn ? `AS${c.peer_asn}` : '—' }}</td>
+                    <td v-if="hasIfaces" class="px-4 py-2 font-mono text-xs text-zinc-400" :title="c.next_hop ? `próximo salto ${c.next_hop}` : undefined">
+                      <span :class="c.ifaces.some((i) => i.split('→')[0] === i.split('→')[1]) ? 'text-amber-400' : ''">{{ c.ifaces.join(', ') || '—' }}</span>
+                      <span v-if="c.next_hop" class="block text-[10px] text-zinc-600">via {{ c.next_hop }}</span>
+                    </td>
                     <td v-if="hasTranslation" class="px-4 py-2 font-mono text-amber-400/90">
                       <router-link v-if="c.translated" :to="`/talkers/${encodeURIComponent(c.translated)}`" class="hover:text-amber-300">{{ c.translated }}</router-link>
                       <span v-else class="text-zinc-700">—</span>

@@ -76,6 +76,9 @@ pub const IANA_IPV4_DST_ADDR: u16 = 12;
 pub const IANA_EGRESS_IFACE: u16 = 14;
 /// 0 = ingress, 1 = egress (router perspective)
 pub const IANA_FLOW_DIRECTION: u16 = 61;
+pub const IANA_IPV4_NEXT_HOP: u16 = 15;
+pub const IANA_IPV6_NEXT_HOP: u16 = 62;
+pub const IANA_FORWARDING_STATUS: u16 = 89;
 // Post-NAT (task 17.8)
 pub const IANA_POST_NAT_SRC_IPV4: u16 = 225;
 pub const IANA_POST_NAT_DST_IPV4: u16 = 226;
@@ -422,6 +425,8 @@ fn empty_flow(export_time: u32, exporter_ip: std::net::Ipv4Addr) -> NormalizedFl
         nat_dst_ip: None,
         nat_src_port: 0,
         nat_dst_port: 0,
+        next_hop: None,
+        fwd_status: 0,
     }
 }
 
@@ -507,6 +512,13 @@ fn decode_field(flow: &mut NormalizedFlow, field_type: u16, field_data: &[u8]) {
         }
         IANA_POST_NAT_DST_IPV4 | IANA_POST_NAT_DST_IPV6 | NSEL_XLATE_DST_ADDR_IPV4 => {
             flow.nat_dst_ip = read_ip(field_data).or(flow.nat_dst_ip);
+        }
+        IANA_IPV4_NEXT_HOP | IANA_IPV6_NEXT_HOP => flow.next_hop = read_ip(field_data),
+        // 1 byte in NetFlow v9; the status byte is the lowest one when wider
+        IANA_FORWARDING_STATUS => {
+            if let Some(b) = field_data.last() {
+                flow.fwd_status = *b;
+            }
         }
         IANA_POST_NAPT_SRC_PORT | NSEL_XLATE_SRC_PORT => {
             flow.nat_src_port = read_uint(field_data) as u16
@@ -1683,6 +1695,24 @@ mod tests {
         assert_eq!(f.nat_src_port, 61000);
         assert_eq!(f.nat_dst_port, 2222);
         assert_eq!(f.bytes, 1000);
+    }
+
+    // AC-01 (task 17.14)
+    #[test]
+    fn test_interfaces_next_hop_and_forwarding_status() {
+        let mut fields = base_fields();
+        fields.push((IANA_INGRESS_IFACE, 29u16.to_be_bytes().to_vec()));
+        fields.push((IANA_EGRESS_IFACE, 29u16.to_be_bytes().to_vec()));
+        fields.push((IANA_IPV4_NEXT_HOP, vec![172, 18, 1, 41]));
+        fields.push((IANA_FORWARDING_STATUS, vec![0x42]));
+        let pkt = build_packet_with_fields(9, &fields);
+
+        let mut cache = ThreadLocalTemplateCache::new();
+        let exporter = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        let f = parse_packet(&pkt, &mut cache, exporter).expect("parse")[0];
+        assert_eq!((f.ingress_interface, f.egress_interface), (29, 29));
+        assert_eq!(f.next_hop, v4(172, 18, 1, 41));
+        assert_eq!(f.fwd_status >> 6, 1, "forwarded");
     }
 
     // AC-03 (task 17.8)

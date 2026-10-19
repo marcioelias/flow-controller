@@ -21,6 +21,11 @@ pub struct AggregationKey {
     pub nat_dst_ip: Option<IpAddrType>,
     pub nat_src_port: u16,
     pub nat_dst_port: u16,
+    /// Interfaces, next hop and forwarding status (task 17.14)
+    pub in_if: u32,
+    pub out_if: u32,
+    pub next_hop: Option<IpAddrType>,
+    pub fwd_status: u8,
 }
 
 /// The accumulated metrics for a given AggregationKey
@@ -94,6 +99,10 @@ impl ThreadLocalAggregator {
             nat_dst_ip: flow.nat_dst_ip,
             nat_src_port: flow.nat_src_port,
             nat_dst_port: flow.nat_dst_port,
+            in_if: flow.ingress_interface,
+            out_if: flow.egress_interface,
+            next_hop: flow.next_hop,
+            fwd_status: flow.fwd_status,
         };
 
         let (s0, s1) = slice_bounds(flow.start_ms, flow.end_ms, now_secs);
@@ -165,6 +174,8 @@ mod tests {
             nat_dst_ip: None,
             nat_src_port: 0,
             nat_dst_port: 0,
+            next_hop: None,
+            fwd_status: 0,
         }
     }
 
